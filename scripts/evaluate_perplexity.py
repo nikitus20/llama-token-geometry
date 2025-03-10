@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.model.transformer import GPT
 from src.utils.data import get_tokenizer
 from src.utils.wikitext_dataset import WikiTextDataset, WikiTextPerplexityEvaluator
+from src.model.utils import get_device
 
 # Configure logging
 logging.basicConfig(
@@ -46,10 +47,15 @@ def main():
     # Evaluation arguments
     parser.add_argument('--batch-size', type=int, default=4,
                        help='Batch size for evaluation')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='Device to run evaluation on')
+    parser.add_argument('--device', type=str, default=None,
+                       help='Device to run evaluation on (cuda, mps, or cpu)')
     
     args = parser.parse_args()
+    
+    # Set device
+    if args.device is None:
+        args.device = get_device()
+    logger.info(f"Using device: {args.device}")
     
     # Check if model exists
     if not os.path.exists(args.model):

@@ -1,127 +1,146 @@
-oken Geometry Analyzer
+# Token Geometry Analyzer
+
 This project analyzes token representations in transformer models with LLaMA-inspired architecture. It can compare Pre-Layer Normalization (PreLN) and Post-Layer Normalization (PostLN) architectures, as well as evaluate between standard transformer components and LLaMA-style components (RMSNorm, SwiGLU).
-Show Image
-Note: Example visualization showing token geometry across different model architectures.
-Features
 
-Configurable transformer model with support for:
+## Features
 
-PreLN or PostLN architecture
-RMSNorm or LayerNorm
-SwiGLU or GELU activation functions
+- Configurable transformer model with support for:
+  - PreLN or PostLN architecture
+  - RMSNorm or LayerNorm
+  - SwiGLU or GELU activation functions
 
+- Token geometry analysis showing how token representations evolve through network layers
+- Advanced training capabilities:
+  - Support for Wikitext-2 dataset with perplexity evaluation
+  - Learning rate warmup and weight decay
+  - Training progress visualization
 
-Token geometry analysis showing how token representations evolve through network layers
-Advanced training capabilities:
+- Visualization of token similarity matrices
+- Comparative analysis between different architectures
 
-Support for Wikitext-2 dataset with perplexity evaluation
-Learning rate warmup and weight decay
-Training progress visualization
+## Requirements
 
-
-Visualization of token similarity matrices
-Comparative analysis between different architectures
-
-Project Structure
-Copytoken_geometry_analyzer/
-├── src/
-│   ├── model/          - Model classes and utilities
-│   ├── tokenizer/      - Tokenizer implementations 
-│   ├── analyzer/       - Geometry analysis tools
-│   └── utils/          - Data and utilities
-├── scripts/
-│   ├── train.py        - Training script
-│   └── analyze.py      - Analysis script
-├── data/
-│   ├── embedding/      - Tokenizer files
-│   └── prompts.txt     - Sample prompts
-└── saved_models/       - Directory for saved models
-Requirements
-Copytorch>=2.0.0
+```
+torch>=2.0.0
 numpy
 matplotlib
 seaborn
 pandas
 tqdm
-Usage
-Training a Model
-To train a PostLN model with a small warmup stage:
-bashCopypython scripts/train.py \
-    --text-file data/your_corpus.txt \
-    --model-name postln_model_warmup \
-    --warmup-steps 50 \
-    --max-steps 500 \
-    --n-layer 6
-Note: By default, this creates a PostLN architecture. Use --pre-ln to create a PreLN model instead.
-Running Token Geometry Analysis
-Analyze token geometry with both random and trained models:
-bashCopypython scripts/analyze.py \
-    --prompts data/prompts.txt \
-    --output-dir outputs/token_geometry_analysis \
-    --layers 6 \
-    --trained-model postln_model_warmup
-Model Architecture Options
-The project supports several architectural variants:
+tiktoken
+datasets
+```
 
-LLaMA-PreLN: RMSNorm + SwiGLU activation with Pre-LN architecture
-LLaMA-PostLN: RMSNorm + SwiGLU activation with Post-LN architecture
-Standard-PreLN: LayerNorm + GELU activation with Pre-LN architecture
-Standard-PostLN: LayerNorm + GELU activation with Post-LN architecture
+## Installation
 
-Interpreting Results
-Token geometry analysis produces several outputs:
-
-Line plots showing average cosine similarity between token representations across layers
-Heatmaps showing pairwise token similarity matrices at different layers
-Difference plots showing how architectures differ in their token representations
-
-Higher cosine similarity indicates tokens are becoming more similar in the representation space. The way this similarity evolves through layers provides insight into how the network processes information.
-Example Outputs
-Token Similarity Comparison
-Show Image
-The above graph shows how token similarity evolves across layers in different architectures. Notice how:
-
-PreLN architectures generally maintain higher token distinctiveness
-Trained models show different patterns than randomly initialized ones
-LLaMA-style architectures with SwiGLU show unique patterns of token geometry
-
-Similarity Heatmaps
-Show Image
-Heatmaps visualize the pairwise similarity between tokens at a specific layer. Brighter colors indicate higher similarity.
-Training Progress
-Show Image
-During training, the system tracks both loss and perplexity, providing visualizations of how the model improves over time. Lower perplexity indicates better language modeling performance.
-Installation
 Install from source:
-bashCopygit clone https://github.com/yourusername/token_geometry_analyzer.git
+
+```bash
+git clone https://github.com/yourusername/token_geometry_analyzer.git
 cd token_geometry_analyzer
 pip install -e .
-Quick Start
-Training with Wikitext-2
+```
 
-Download the Wikitext-2 dataset and train a model:
+## Quick Start Commands
 
-bashCopybash scripts/train_postln_model.sh
+Here are the main commands you can use to work with this project:
 
-Evaluate perplexity on the test set:
+### Dataset Preparation
 
-bashCopybash scripts/evaluate_models.sh
-Token Geometry Analysis
-
-Run token geometry analysis with the trained model:
-
-bashCopybash scripts/run_analysis.sh
-
-View results in the outputs/token_geometry_analysis directory.
-
-Manual Training
-For more control over the training process:
-bashCopy# Download Wikitext-2 dataset
+```bash
+# Download and prepare the Wikitext-2 dataset
 python scripts/download_wikitext.py
+```
+This command downloads the Wikitext-2 dataset from HuggingFace or directly from the source and prepares it for training.
 
+### Training Models
+
+```bash
+# Train a model with default PostLN architecture
+bash scripts/train_postln_model.sh
+```
+This script first checks if the Wikitext-2 dataset exists and downloads it if needed. Then it trains a PostLN model with the following configuration:
+- 6 layers, 6 attention heads, 384 embedding dimension
+- 256 block size, 1000 training steps, 100 warmup steps
+- Evaluates perplexity every 50 steps and saves checkpoints every 200 steps
+
+For more control over training parameters:
+
+```bash
 # Train with custom parameters
 python scripts/train.py --dataset wikitext --data-dir data/wikitext-2 \
     --model-name my_custom_model --n-layer 8 --pre-ln --use-swiglu \
     --max-steps 2000 --warmup-steps 200
-Contributing
+```
+
+Available training options:
+- `--pre-ln`: Use Pre-LN architecture (default is Post-LN)
+- `--use-rms-norm`: Use RMSNorm instead of LayerNorm
+- `--use-swiglu`: Use SwiGLU activation instead of GELU
+- `--tokenizer`: Choose tokenizer (tiktoken, bpe, or char)
+
+### Model Evaluation
+
+```bash
+# Evaluate perplexity of trained models on Wikitext-2 test set
+bash scripts/evaluate_models.sh
+```
+This script evaluates the perplexity of all trained models in the saved_models directory on the Wikitext-2 test set.
+
+### Token Geometry Analysis
+
+```bash
+# Run token geometry analysis
+bash scripts/run_analysis.sh
+```
+This script runs token geometry analysis on both random models with different architectures and a trained model. It produces visualizations showing how token representations evolve through the network layers and creates heatmaps of token similarity.
+
+For more control over analysis parameters:
+
+```bash
+python scripts/analyze.py \
+    --prompts data/prompts.txt \
+    --output-dir outputs/my_custom_analysis \
+    --layers 6 \
+    --trained-model my_custom_model \
+    --tokenizer tiktoken
+```
+
+### Model Evolution Experiment
+
+```bash
+# Analyze how token geometry evolves during training
+python scripts/model_evolution_experiment.py \
+    --iterations 200 \
+    --learning-rate 1e-5 \
+    --output-dir outputs/my_custom_experiment
+```
+This script analyzes how token geometry evolves during training by:
+1. Creating an initial model
+2. Analyzing token geometry before training
+3. Training for a specified number of iterations
+4. Analyzing token geometry after training
+5. Comparing the token geometry before and after training
+
+## Model Architecture Options
+
+The project supports several architectural variants:
+
+- LLaMA-PreLN: RMSNorm + SwiGLU activation with Pre-LN architecture
+- LLaMA-PostLN: RMSNorm + SwiGLU activation with Post-LN architecture
+- Standard-PreLN: LayerNorm + GELU activation with Pre-LN architecture
+- Standard-PostLN: LayerNorm + GELU activation with Post-LN architecture
+
+## Interpreting Results
+
+Token geometry analysis produces several outputs:
+
+- Line plots showing average cosine similarity between token representations across layers
+- Heatmaps showing pairwise token similarity matrices at different layers
+- Difference plots showing how architectures differ in their token representations
+
+Higher cosine similarity indicates tokens are becoming more similar in the representation space. The way this similarity evolves through layers provides insight into how the network processes information.
+
+## Contributing
+
 Contributions are welcome! Please feel free to submit a Pull Request.

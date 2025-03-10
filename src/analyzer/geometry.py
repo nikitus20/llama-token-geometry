@@ -19,16 +19,19 @@ class GeometryAnalyzer:
     how token geometry changes across layers.
     """
     
-    def __init__(self, model: GPT, device: str = 'cuda'):
+    def __init__(self, model: GPT, device: str = None):
         """
         Initialize geometry analyzer for a GPT model.
         
         Args:
             model: GPT model
-            device: device to run on
+            device: device to run on (cuda, mps, or cpu)
         """
-        self.model = model
+        from src.model.utils import get_device
+        if device is None:
+            device = get_device()
         self.device = device
+        self.model = model
         self.model.to(device)
         self.model.eval()
         

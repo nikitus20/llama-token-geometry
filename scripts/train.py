@@ -24,6 +24,7 @@ from src.model.config import GPTConfig
 from src.model.transformer import GPT
 from src.tokenizer.base import BaseTokenizer
 from src.utils.data import get_tokenizer
+from src.model.utils import get_device
 
 # Configure logging
 logging.basicConfig(
@@ -302,6 +303,8 @@ def main():
                          help='Maximum sequence length')
     data_group.add_argument('--use-bpe', action='store_true',
                          help='Use BPE tokenizer instead of character tokenizer')
+    data_group.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
+                         help='Tokenizer to use (tiktoken, bpe, or char)')
     
     # Model arguments
     model_group = parser.add_argument_group('Model')
@@ -340,16 +343,21 @@ def main():
                           help='Evaluate perplexity every N steps')
     train_group.add_argument('--no-validation', action='store_true',
                           help='Disable validation (no perplexity calculation)')
-    train_group.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                          help='Device to train on')
+    train_group.add_argument('--device', type=str, default=None,
+                          help='Device to train on (cuda, mps, or cpu)')
     
     args = parser.parse_args()
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
+    # Set device
+    if args.device is None:
+        args.device = get_device()
+    logger.info(f"Using device: {args.device}")
+    
     # Get tokenizer
-    tokenizer = get_tokenizer(use_bpe=args.use_bpe)
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
     
     # Create datasets
     if args.dataset == 'wikitext':

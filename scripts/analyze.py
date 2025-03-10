@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.model.transformer import GPT
-from src.model.utils import create_random_model, get_model_info, get_available_models
+from src.model.utils import create_random_model, get_model_info, get_available_models, get_device
 from src.tokenizer.base import BaseTokenizer
 from src.utils.data import load_prompts, get_tokenizer
 from src.analyzer.geometry import GeometryAnalyzer
@@ -207,14 +207,21 @@ def main():
                        help='Name of trained model to include in analysis')
     parser.add_argument('--no-trained-model', action='store_false', dest='include_trained_model',
                        help='Do not include trained model in analysis')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='Device to run on (default: cuda if available, else cpu)')
+    parser.add_argument('--device', type=str, default=None,
+                       help='Device to run on (cuda, mps, or cpu)')
+    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
+                       help='Tokenizer to use (tiktoken, bpe, or char)')
     
     args = parser.parse_args()
     
     # Configure logging level based on debug flag
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
+    
+    # Set device
+    if args.device is None:
+        args.device = get_device()
+    logger.info(f"Using device: {args.device}")
     
     try:
         # Load prompts
@@ -226,7 +233,7 @@ def main():
             prompts = load_prompts()
         
         # Get tokenizer
-        tokenizer = get_tokenizer(args.use_bpe)
+        tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
         
         # Check for trained model
         trained_model_path = None
