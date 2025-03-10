@@ -12,6 +12,20 @@ from src.model.transformer import GPT
 
 logger = logging.getLogger(__name__)
 
+def get_device() -> str:
+    """
+    Get the best available device for running models.
+    
+    Returns:
+        Device string: 'cuda', 'mps', or 'cpu'
+    """
+    if torch.cuda.is_available():
+        return 'cuda'
+    elif hasattr(torch, 'backends') and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return 'mps'
+    else:
+        return 'cpu'
+
 def create_random_model(pre_ln: bool = True, 
                        vocab_size: Optional[int] = None, 
                        device: Optional[str] = None, 

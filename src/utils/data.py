@@ -50,25 +50,36 @@ def _get_sample_prompts() -> List[str]:
     ]
 
 
-def get_tokenizer(use_bpe: bool = True) -> BaseTokenizer:
+def get_tokenizer(tokenizer_type: str = "tiktoken") -> BaseTokenizer:
     """
-    Get either BPE or character tokenizer.
+    Get a tokenizer based on the specified type.
     
     Args:
-        use_bpe: Whether to use BPE tokenizer
+        tokenizer_type: Type of tokenizer to use ("tiktoken", "bpe", or "char")
         
     Returns:
         A tokenizer instance
     """
-    if use_bpe and os.path.exists('data/embedding/encoder.json') and os.path.exists('data/embedding/vocab.bpe'):
+    # Try tiktoken first (best option)
+    if tokenizer_type.lower() == "tiktoken":
+        try:
+            logger.info("Using Tiktoken tokenizer (GPT-2 encoding)")
+            return TiktokenTokenizer("gpt2")
+        except Exception as e:
+            logger.error(f"Error loading Tiktoken tokenizer: {e}")
+            logger.info("Falling back to BPE tokenizer")
+            tokenizer_type = "bpe"
+    
+    # Try BPE next
+    if tokenizer_type.lower() == "bpe" and os.path.exists('data/embedding/encoder.json') and os.path.exists('data/embedding/vocab.bpe'):
         try:
             logger.info("Using BPE tokenizer from embedding files")
-            tokenizer = BPETokenizer('data/embedding/encoder.json', 'data/embedding/vocab.bpe')
-            return tokenizer
+            return BPETokenizer('data/embedding/encoder.json', 'data/embedding/vocab.bpe')
         except Exception as e:
             logger.error(f"Error loading BPE tokenizer: {e}")
             logger.info("Falling back to character tokenizer")
     
+    # Character tokenizer as last resort
     logger.info("Using character-level tokenizer")
     return CharTokenizer(256)
 

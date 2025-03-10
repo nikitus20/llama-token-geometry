@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.model.transformer import GPT
-from src.model.utils import create_random_model
+from src.model.utils import create_random_model, get_device
 from src.utils.data import get_tokenizer
 from src.analyzer.geometry import GeometryAnalyzer
 
@@ -29,6 +29,10 @@ def test_model_creation():
     """Test creating models with different configurations."""
     logger.info("Testing model creation...")
     
+    # Get device
+    device = get_device()
+    logger.info(f"Using device: {device}")
+    
     configurations = [
         {"name": "LLaMA-PreLN", "pre_ln": True, "use_rms_norm": True, "use_swiglu": True},
         {"name": "LLaMA-PostLN", "pre_ln": False, "use_rms_norm": True, "use_swiglu": True},
@@ -42,12 +46,13 @@ def test_model_creation():
             pre_ln=config["pre_ln"],
             use_rms_norm=config["use_rms_norm"],
             use_swiglu=config["use_swiglu"],
-            n_layer=2  # Use small model for testing
+            n_layer=2,  # Use small model for testing
+            device=device
         )
         logger.info(f"{config['name']} model created successfully with {model.get_num_params()/1e6:.2f}M parameters")
         
         # Test forward pass
-        dummy_input = torch.randint(0, 100, (1, 10))
+        dummy_input = torch.randint(0, 100, (1, 10), device=device)
         logits, _ = model(dummy_input)
         logger.info(f"Forward pass successful, output shape: {logits.shape}")
     
@@ -81,17 +86,21 @@ def test_geometry_analyzer():
     """Test geometry analyzer functionality."""
     logger.info("Testing geometry analyzer...")
     
+    # Get device
+    device = get_device()
+    logger.info(f"Using device: {device}")
+    
     # Create a small model for testing
-    model = create_random_model(n_layer=2, device='cpu')
+    model = create_random_model(n_layer=2, device=device)
     
     # Create analyzer
-    analyzer = GeometryAnalyzer(model, device='cpu')
+    analyzer = GeometryAnalyzer(model, device=device)
     
     # Test with a simple input
     tokenizer = get_tokenizer(use_bpe=False)
     test_text = "This is a test sentence for the analyzer."
     tokens = tokenizer.encode(test_text)
-    input_ids = torch.tensor([tokens], dtype=torch.long)
+    input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
     
     # Test computing cosine similarities
     cosine_sims = analyzer.compute_token_cosine_similarities(input_ids)
@@ -111,6 +120,10 @@ def test_pretrained_model_loading():
     """Test loading a pretrained model if available."""
     logger.info("Testing pretrained model loading...")
     
+    # Get device
+    device = get_device()
+    logger.info(f"Using device: {device}")
+    
     # Check for saved models
     saved_models_dir = 'saved_models'
     if not os.path.exists(saved_models_dir):
@@ -123,11 +136,11 @@ def test_pretrained_model_loading():
         if os.path.isdir(model_dir) and os.path.exists(os.path.join(model_dir, "model.pt")):
             try:
                 logger.info(f"Found model at {model_dir}, attempting to load...")
-                model = GPT.from_pretrained(model_dir, device='cpu')
+                model = GPT.from_pretrained(model_dir, device=device)
                 logger.info(f"Successfully loaded model with {model.get_num_params()/1e6:.2f}M parameters")
                 
                 # Test forward pass
-                dummy_input = torch.randint(0, 100, (1, 10))
+                dummy_input = torch.randint(0, 100, (1, 10), device=device)
                 logits, _ = model(dummy_input)
                 logger.info(f"Forward pass successful, output shape: {logits.shape}")
                 return
