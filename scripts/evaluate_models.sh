@@ -38,7 +38,7 @@ for model_dir in saved_models/*; do
             --data-dir data/wikitext-2 \
             --split test \
             --batch-size 16 \
-            --use-bpe \
+            --tokenizer tiktoken \
             --device $DEVICE
     fi
 done

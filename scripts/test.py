@@ -64,7 +64,7 @@ def test_tokenizer():
     logger.info("Testing tokenizers...")
     
     # Test character tokenizer
-    tokenizer = get_tokenizer(use_bpe=False)
+    tokenizer = get_tokenizer(tokenizer_type="char")
     test_text = "Hello, world!"
     tokens = tokenizer.encode(test_text)
     decoded = tokenizer.decode(tokens)
@@ -72,12 +72,21 @@ def test_tokenizer():
     
     # Try to test BPE tokenizer if available
     try:
-        bpe_tokenizer = get_tokenizer(use_bpe=True)
+        bpe_tokenizer = get_tokenizer(tokenizer_type="bpe")
         bpe_tokens = bpe_tokenizer.encode(test_text)
         bpe_decoded = bpe_tokenizer.decode(bpe_tokens)
         logger.info(f"BPE tokenizer: '{test_text}' -> {bpe_tokens} -> '{bpe_decoded}'")
     except Exception as e:
         logger.warning(f"BPE tokenizer test skipped: {e}")
+        
+    # Try to test Tiktoken tokenizer if available
+    try:
+        tiktoken_tokenizer = get_tokenizer(tokenizer_type="tiktoken")
+        tiktoken_tokens = tiktoken_tokenizer.encode(test_text)
+        tiktoken_decoded = tiktoken_tokenizer.decode(tiktoken_tokens)
+        logger.info(f"Tiktoken tokenizer: '{test_text}' -> {tiktoken_tokens} -> '{tiktoken_decoded}'")
+    except Exception as e:
+        logger.warning(f"Tiktoken tokenizer test skipped: {e}")
     
     logger.info("Tokenizer tests completed!")
 
@@ -97,18 +106,18 @@ def test_geometry_analyzer():
     analyzer = GeometryAnalyzer(model, device=device)
     
     # Test with a simple input
-    tokenizer = get_tokenizer(use_bpe=False)
+    tokenizer = get_tokenizer(tokenizer_type="char")
     test_text = "This is a test sentence for the analyzer."
     tokens = tokenizer.encode(test_text)
     input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
     
-    # Test computing cosine similarities
-    cosine_sims = analyzer.compute_token_cosine_similarities(input_ids)
-    logger.info(f"Computed cosine similarities: {cosine_sims}")
+    # Test computing token metrics
+    metrics = analyzer.compute_token_metrics(input_ids)
+    logger.info(f"Computed token metrics: {metrics}")
     
     # Test analyzing single prompt
-    sim_matrices, tokens = analyzer.analyze_single_prompt(test_text, tokenizer)
-    logger.info(f"Analyzed prompt, got {len(sim_matrices)} similarity matrices")
+    analysis_result = analyzer.analyze_single_prompt(test_text, tokenizer)
+    logger.info(f"Analyzed prompt, got {len(analysis_result['similarity_matrices'])} similarity matrices and metrics: {analysis_result['metrics']}")
     
     # Cleanup
     analyzer.cleanup()

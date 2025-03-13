@@ -41,8 +41,8 @@ def main():
                        help='Dataset split to evaluate on')
     parser.add_argument('--text-file', type=str,
                        help='Path to custom text file for evaluation (used when dataset=text)')
-    parser.add_argument('--use-bpe', action='store_true',
-                       help='Use BPE tokenizer instead of character tokenizer')
+    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
+                       help='Tokenizer to use (tiktoken, bpe, or char)')
     
     # Evaluation arguments
     parser.add_argument('--batch-size', type=int, default=4,
@@ -72,7 +72,7 @@ def main():
         return
     
     # Get tokenizer
-    tokenizer = get_tokenizer(use_bpe=args.use_bpe)
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
     
     # Create evaluation dataset
     if args.dataset == 'wikitext':

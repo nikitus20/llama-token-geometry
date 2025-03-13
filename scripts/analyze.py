@@ -55,19 +55,25 @@ def analyze_similarity_heatmaps(prompts, output_dir, models, tokenizer, device):
     logger.info(f"Analyzing prompt: '{sample_prompt}'")
     
     # Analyze with each model
-    sim_matrices = {}
+    analysis_results = {}
     for model_name, model in models.items():
         analyzer = GeometryAnalyzer(model, device)
         
         try:
-            matrices, tokens = analyzer.analyze_single_prompt(sample_prompt, tokenizer)
-            sim_matrices[model_name] = matrices
+            # Use the new analyze_single_prompt which returns a dictionary
+            analysis_result = analyzer.analyze_single_prompt(sample_prompt, tokenizer)
+            analysis_results[model_name] = analysis_result
             logger.info(f"Successfully analyzed {model_name} model with prompt.")
         except Exception as e:
             logger.error(f"Error analyzing {model_name} model: {e}")
-            sim_matrices[model_name] = {}
+            analysis_results[model_name] = {'similarity_matrices': {}}
             
         analyzer.cleanup()
+    
+    # Extract similarity matrices
+    sim_matrices = {}
+    for model_name, result in analysis_results.items():
+        sim_matrices[model_name] = result.get('similarity_matrices', {})
     
     # Plot heatmaps for each layer for each model
     all_layers = set()
@@ -160,21 +166,27 @@ def compare_architectures(prompts, output_dir, tokenizer, n_layer=24, device='cu
     for model_name, model in models.items():
         logger.info(f"Analyzing {model_name} model...")
         analyzer = GeometryAnalyzer(model, device)
-        cosine_sims = analyzer.analyze_prompts(prompts, tokenizer)
+        metrics = analyzer.analyze_prompts(prompts, tokenizer)
         
-        # Save individual results
+        # Save individual results for all metrics
         plot_token_geometry(
-            cosine_sims, 
+            metrics, 
             title=f"Token Geometry for {model_name} Model",
             output_path=os.path.join(output_dir, f"{model_name.lower()}_token_geometry.png")
         )
         analyzer.cleanup()
         
         # Store results for comparison
-        results[model_name] = cosine_sims
+        results[model_name] = metrics
     
-    # Plot comparison of all architectures
-    plot_architecture_comparison(results, output_dir, n_layer)
+    # Plot comparison of all architectures for each metric type
+    metrics_to_compare = ['cosine_sim', 'token_norm', 'update_norm']
+    for metric in metrics_to_compare:
+        try:
+            plot_architecture_comparison(results, output_dir, n_layer, metric_name=metric)
+            logger.info(f"Created architecture comparison for {metric}")
+        except Exception as e:
+            logger.warning(f"Could not create comparison for {metric}: {e}")
     
     # Generate heatmaps
     analyze_similarity_heatmaps(prompts, output_dir, models, tokenizer, device)
@@ -195,10 +207,6 @@ def main():
                        help='Number of prompts to use (None for all)')
     parser.add_argument('--output-dir', type=str, default='outputs/token_geometry',
                        help='Directory to save results')
-    parser.add_argument('--use-bpe', action='store_true', default=True,
-                       help='Use BPE tokenizer instead of character tokenizer')
-    parser.add_argument('--no-bpe', dest='use_bpe', action='store_false',
-                       help='Do not use BPE tokenizer (use character tokenizer instead)')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging')
     parser.add_argument('--layers', type=int, default=12,

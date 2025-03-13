@@ -74,7 +74,7 @@ def create_tiktoken_tokenizer():
         logger.info("Falling back to character tokenizer")
         return CharTokenizer(256)
 
-def create_model(vocab_size, n_layer=6, use_rms_norm=True, use_swiglu=True, pre_ln=False):
+def create_model(vocab_size, n_layer=12, use_rms_norm=True, use_swiglu=True, pre_ln=False):
     """
     Create a model with the specified architecture.
     
@@ -94,7 +94,7 @@ def create_model(vocab_size, n_layer=6, use_rms_norm=True, use_swiglu=True, pre_
         n_layer=n_layer,
         n_head=8,
         n_embd=384,
-        dropout=0.1,
+        dropout=0.,
         bias=False,
         pre_ln=pre_ln,
         use_rms_norm=use_rms_norm,
@@ -179,7 +179,10 @@ def analyze_token_geometry(model, tokenizer, prompt, device='cuda'):
         device: Device to run on
         
     Returns:
-        Dictionary with layer indices as keys and similarity matrices as values
+        Dictionary with complete analysis results including:
+        - similarity_matrices: Cosine similarity matrices per layer
+        - metrics: Token geometry metrics (cosine_sim, token_norm, update_norm)
+        - tokens: The tokenized input
     """
     model = model.to(device)
     model.eval()
@@ -188,25 +191,34 @@ def analyze_token_geometry(model, tokenizer, prompt, device='cuda'):
     analyzer = GeometryAnalyzer(model, device)
     
     # Analyze prompt
-    sim_matrices, tokens = analyzer.analyze_single_prompt(prompt, tokenizer)
+    analysis_result = analyzer.analyze_single_prompt(prompt, tokenizer)
     
     # Clean up
     analyzer.cleanup()
     
-    return sim_matrices
+    return analysis_result
 
-def plot_geometry_comparison(initial_matrices, final_matrices, output_dir):
+def plot_geometry_comparison(initial_results, final_results, output_dir):
     """
-    Plot comparison of token geometry before and after training.
+    Plot comparison of token geometry before and after training,
+    including similarity matrices and additional metrics.
     
     Args:
-        initial_matrices: Similarity matrices for initial model
-        final_matrices: Similarity matrices for final model
+        initial_results: Analysis results for initial model
+        final_results: Analysis results for final model
         output_dir: Output directory
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Get common layers
+    # Extract similarity matrices from results
+    initial_matrices = initial_results.get('similarity_matrices', {})
+    final_matrices = final_results.get('similarity_matrices', {})
+    
+    # Extract metrics
+    initial_metrics = initial_results.get('metrics', {})
+    final_metrics = final_results.get('metrics', {})
+    
+    # Get common layers for similarity matrices
     common_layers = sorted(set(initial_matrices.keys()) & set(final_matrices.keys()))
     
     if not common_layers:
@@ -335,6 +347,104 @@ def plot_geometry_comparison(initial_matrices, final_matrices, output_dir):
     plt.savefig(output_path, dpi=150)
     plt.close()
     logger.info(f"Saved similarity change plot to {output_path}")
+    
+    # Now plot the additional metrics (token norms and update norms)
+    plot_metrics_comparison(initial_metrics, final_metrics, common_layers, output_dir)
+
+def plot_metrics_comparison(initial_metrics, final_metrics, common_layers, output_dir):
+    """
+    Plot comparison of token metrics before and after training.
+    
+    Args:
+        initial_metrics: Metrics from initial model
+        final_metrics: Metrics from final model
+        common_layers: List of common layers between models
+        output_dir: Output directory
+    """
+    # Make sure we have metrics to plot
+    if not initial_metrics or not final_metrics:
+        logger.warning("No metrics available for comparison")
+        return
+    
+    # Define metrics to plot
+    metric_names = ['cosine_sim', 'token_norm', 'update_norm']
+    metric_labels = {
+        'cosine_sim': 'Average Cosine Similarity',
+        'token_norm': 'Token Representation Norm',
+        'update_norm': 'Update Norm (Change Between Layers)'
+    }
+    
+    # Create figure with subplots for each metric
+    fig, axes = plt.subplots(len(metric_names), 1, figsize=(12, 15), sharex=True)
+    fig.suptitle("Token Metrics Evolution During Training", fontsize=16)
+    
+    # Plot each metric
+    for i, metric_name in enumerate(metric_names):
+        ax = axes[i]
+        
+        # Get metric values for each model
+        # Check if we have this metric in both models
+        if metric_name not in initial_metrics or metric_name not in final_metrics:
+            ax.text(0.5, 0.5, f"Metric '{metric_name}' not available", 
+                    horizontalalignment='center', verticalalignment='center',
+                    transform=ax.transAxes)
+            continue
+            
+        init_values = []
+        final_values = []
+        layers = []
+        
+        # Get common layers for this metric
+        init_layers = sorted(initial_metrics[metric_name].keys())
+        final_layers = sorted(final_metrics[metric_name].keys())
+        common_metric_layers = sorted(set(init_layers) & set(final_layers))
+        
+        if not common_metric_layers:
+            ax.text(0.5, 0.5, f"No common layers for '{metric_name}'", 
+                    horizontalalignment='center', verticalalignment='center',
+                    transform=ax.transAxes)
+            continue
+        
+        # Collect values
+        for layer in common_metric_layers:
+            init_values.append(initial_metrics[metric_name][layer])
+            final_values.append(final_metrics[metric_name][layer])
+            layers.append(layer)
+        
+        # Plot values
+        ax.plot(layers, init_values, 'b-', marker='o', label="Initial Model")
+        ax.plot(layers, final_values, 'r-', marker='s', label="Trained Model")
+        
+        # Add labels and grid
+        ax.set_ylabel(metric_labels.get(metric_name, metric_name), fontsize=12)
+        ax.set_title(f"Evolution of {metric_labels.get(metric_name, metric_name)}", fontsize=14)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend()
+        
+        # Also plot the difference as a bar chart in a twin axis
+        ax2 = ax.twinx()
+        diff_values = [final - init for init, final in zip(init_values, final_values)]
+        bars = ax2.bar(layers, diff_values, alpha=0.3, color='gray', width=0.4)
+        ax2.set_ylabel('Change', color='gray')
+        
+        # Color bars based on sign
+        for j, bar in enumerate(bars):
+            if diff_values[j] > 0:
+                bar.set_color('green')
+            else:
+                bar.set_color('red')
+    
+    # Set common x-axis label
+    axes[-1].set_xlabel("Layer", fontsize=12)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    # Save the figure
+    output_path = os.path.join(output_dir, "metrics_evolution.png")
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved metrics evolution plot to {output_path}")
 
 def main():
     """Main function to run training and analyze token geometry evolution."""
@@ -392,7 +502,7 @@ def main():
     
     # Analyze initial token geometry
     logger.info("Analyzing initial token geometry...")
-    initial_matrices = analyze_token_geometry(model, tokenizer, args.prompt, args.device)
+    initial_analysis = analyze_token_geometry(model, tokenizer, args.prompt, args.device)
     
     # Train for specified iterations
     logger.info(f"Training for {args.iterations} iterations with lr={args.learning_rate}...")
@@ -413,7 +523,7 @@ def main():
     
     # Analyze final token geometry
     logger.info("Analyzing final token geometry...")
-    final_matrices = analyze_token_geometry(model, tokenizer, args.prompt, args.device)
+    final_analysis = analyze_token_geometry(model, tokenizer, args.prompt, args.device)
     
     # Plot training loss
     plt.figure(figsize=(10, 6))
@@ -432,7 +542,7 @@ def main():
     
     # Compare token geometry before and after training
     logger.info("Comparing token geometry before and after training...")
-    plot_geometry_comparison(initial_matrices, final_matrices, args.output_dir)
+    plot_geometry_comparison(initial_analysis, final_analysis, args.output_dir)
     
     logger.info(f"Analysis complete. Results saved to {args.output_dir}")
 

@@ -39,6 +39,14 @@ class GPT(nn.Module):
             self.transformer.ln_f = RMSNorm(config.n_embd, eps=config.norm_eps)
         else:
             self.transformer.ln_f = LayerNorm(config.n_embd, bias=config.bias, eps=config.norm_eps)
+        
+        # Add an additional normalization layer after embeddings but before blocks for pre-ln architectures
+        if not config.pre_ln:
+            if config.use_rms_norm:
+                self.transformer.ln_emb = RMSNorm(config.n_embd, eps=config.norm_eps)
+            else:
+                self.transformer.ln_emb = LayerNorm(config.n_embd, bias=config.bias, eps=config.norm_eps)
+            logger.info("Added additional normalization layer after embeddings for pre-ln architecture")
             
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # tie weights
@@ -93,6 +101,11 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
+        
+        # Apply additional normalization layer after embeddings for post-ln architecture
+        if not self.config.pre_ln and hasattr(self.transformer, 'ln_emb'):
+            x = self.transformer.ln_emb(x)
+        
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)

@@ -1,12 +1,12 @@
 """
-Analyzer for token geometry in transformer models.
+Enhanced analyzer for token geometry in transformer models.
 """
 
 import torch
 import torch.nn.functional as F
 import numpy as np
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from tqdm import tqdm
 from src.model.transformer import GPT
@@ -17,6 +17,12 @@ class GeometryAnalyzer:
     """
     Analyzes token representations in a GPT model to understand
     how token geometry changes across layers.
+    
+    Features:
+    - Cosine similarity between tokens
+    - Token representation norms
+    - Update norms between consecutive layers
+    - Variance of metrics across different prompts
     """
     
     def __init__(self, model: GPT, device: str = None):
@@ -56,15 +62,18 @@ class GeometryAnalyzer:
             )
         )
         
-    def compute_token_cosine_similarities(self, input_ids: torch.Tensor) -> Dict[int, float]:
+    def compute_token_metrics(self, input_ids: torch.Tensor) -> Dict[str, Dict[int, float]]:
         """
-        Compute average cosine similarity between tokens at each layer.
+        Compute various token metrics at each layer:
+        - Average cosine similarity between tokens
+        - Average token norm
+        - Average update norm (difference between consecutive layers)
         
         Args:
             input_ids: Input token IDs [batch_size, seq_len]
             
         Returns:
-            Dictionary of average cosine similarities per layer
+            Dictionary of metrics, each containing a dictionary of values per layer
         """
         batch_size, seq_len = input_ids.size()
         self.layer_outputs = {}
@@ -73,20 +82,34 @@ class GeometryAnalyzer:
         with torch.no_grad():
             self.model(input_ids)
             
-        # Compute average cosine similarity at each layer
+        # Initialize metric dictionaries
         avg_cosine_sims = {}
+        avg_token_norms = {}
+        avg_update_norms = {}
         
-        for layer_idx, layer_output in self.layer_outputs.items():
+        # Sort layer indices to ensure proper calculation of updates
+        layer_indices = sorted(self.layer_outputs.keys())
+        
+        for i, layer_idx in enumerate(layer_indices):
+            layer_output = self.layer_outputs[layer_idx]
             # Layer output shape: [batch_size, seq_len, hidden_dim]
             
-            # Vectorized computation of cosine similarities for all batches
+            # Initialize lists to collect batch metrics
             batch_sims = []
+            batch_norms = []
+            batch_updates = []
             
             for b in range(batch_size):
-                # Normalize token vectors for cosine similarity
+                # Get token vectors for this batch
                 tokens = layer_output[b]  # [seq_len, hidden_dim]
                 
-                # More numerically stable normalization
+                # 1. Compute token norms
+                token_norms = torch.norm(tokens, p=2, dim=1)  # [seq_len]
+                avg_norm = token_norms.mean().item()
+                batch_norms.append(avg_norm)
+                
+                # 2. Compute cosine similarities
+                # Normalize token vectors for cosine similarity
                 tokens_norm = F.normalize(tokens, p=2, dim=1)
                 
                 # Compute all pairwise cosine similarities
@@ -97,26 +120,68 @@ class GeometryAnalyzer:
                 masked_sim = sim_matrix * mask
                 
                 # Compute average similarity (excluding self-similarity)
-                # Using masked_select for better efficiency
                 avg_sim = masked_sim.masked_select(mask.bool()).mean().item()
                 batch_sims.append(avg_sim)
+                
+                # 3. Compute update norms (if not the first layer)
+                if i > 0:
+                    prev_layer_idx = layer_indices[i-1]
+                    prev_tokens = self.layer_outputs[prev_layer_idx][b]
+                    
+                    # Compute update vectors (difference between consecutive layers)
+                    updates = tokens - prev_tokens  # [seq_len, hidden_dim]
+                    
+                    # Compute norm of updates
+                    update_norms = torch.norm(updates, p=2, dim=1)  # [seq_len]
+                    avg_update = update_norms.mean().item()
+                    batch_updates.append(avg_update)
             
+            # Average across batches
             avg_cosine_sims[layer_idx] = np.mean(batch_sims)
+            avg_token_norms[layer_idx] = np.mean(batch_norms)
             
-        return avg_cosine_sims
+            # Only store update norms for layers after the first one
+            if i > 0:
+                avg_update_norms[layer_idx] = np.mean(batch_updates)
+        
+        # Package all metrics in a dictionary
+        metrics = {
+            'cosine_sim': avg_cosine_sims,
+            'token_norm': avg_token_norms,
+            'update_norm': avg_update_norms
+        }
+        
+        return metrics
     
-    def analyze_prompts(self, prompts: List[str], tokenizer) -> Dict[int, float]:
+    def analyze_prompts(self, prompts: List[str], tokenizer) -> Dict[str, Dict[str, Dict[int, float]]]:
         """
-        Analyze a set of prompts and compute average token geometry metrics.
+        Analyze a set of prompts and compute average token geometry metrics with variances.
         
         Args:
             prompts: List of text prompts
             tokenizer: Tokenizer to convert prompts to token IDs
             
         Returns:
-            Dictionary of average cosine similarities per layer
+            Dictionary with structure:
+            {
+                'mean': {
+                    'cosine_sim': {layer_idx: mean_value, ...},
+                    'token_norm': {layer_idx: mean_value, ...},
+                    'update_norm': {layer_idx: mean_value, ...}
+                },
+                'variance': {
+                    'cosine_sim': {layer_idx: variance_value, ...},
+                    'token_norm': {layer_idx: variance_value, ...},
+                    'update_norm': {layer_idx: variance_value, ...}
+                }
+            }
         """
-        all_cosine_sims = {}
+        # Initialize dictionaries to collect metrics across all prompts
+        all_metrics = {
+            'cosine_sim': {},
+            'token_norm': {},
+            'update_norm': {}
+        }
         
         # Process prompts in batches
         batch_size = 4  # Small batch size to avoid memory issues
@@ -140,28 +205,38 @@ class GeometryAnalyzer:
                 logger.error(f"Error tokenizing batch: {e}")
                 continue
             
-            # Compute cosine similarities
+            # Compute metrics
             try:
-                cosine_sims = self.compute_token_cosine_similarities(batch_input_ids)
+                batch_metrics = self.compute_token_metrics(batch_input_ids)
                 
-                # Accumulate results
-                for layer_idx, avg_sim in cosine_sims.items():
-                    if layer_idx not in all_cosine_sims:
-                        all_cosine_sims[layer_idx] = []
-                    all_cosine_sims[layer_idx].append(avg_sim)
+                # Accumulate results for each metric type
+                for metric_name, layer_values in batch_metrics.items():
+                    for layer_idx, value in layer_values.items():
+                        if layer_idx not in all_metrics[metric_name]:
+                            all_metrics[metric_name][layer_idx] = []
+                        all_metrics[metric_name][layer_idx].append(value)
             except Exception as e:
-                logger.error(f"Error computing cosine similarities: {e}")
+                logger.error(f"Error computing metrics: {e}")
                 continue
         
-        # Compute average across all prompts
-        avg_all_cosine_sims = {
-            layer_idx: np.mean(sims) for layer_idx, sims in all_cosine_sims.items()
-            if len(sims) > 0  # Only include layers with data
+        # Compute mean and variance across all prompts
+        result = {
+            'mean': {},
+            'variance': {}
         }
         
-        return avg_all_cosine_sims
+        for metric_name, layer_values in all_metrics.items():
+            result['mean'][metric_name] = {}
+            result['variance'][metric_name] = {}
+            
+            for layer_idx, values in layer_values.items():
+                if len(values) > 0:
+                    result['mean'][metric_name][layer_idx] = np.mean(values)
+                    result['variance'][metric_name][layer_idx] = np.var(values)
+        
+        return result
     
-    def analyze_single_prompt(self, prompt: str, tokenizer) -> Tuple[Dict[int, np.ndarray], List[int]]:
+    def analyze_single_prompt(self, prompt: str, tokenizer) -> Dict[str, Any]:
         """
         Analyze token geometry for a single prompt.
         
@@ -170,7 +245,7 @@ class GeometryAnalyzer:
             tokenizer: Tokenizer
             
         Returns:
-            Tuple of (similarity matrices per layer, tokens)
+            Dictionary containing metrics and token information
         """
         # Tokenize prompt
         try:
@@ -178,7 +253,7 @@ class GeometryAnalyzer:
             input_ids = torch.tensor([tokens], dtype=torch.long, device=self.device)
         except Exception as e:
             logger.error(f"Error tokenizing prompt: {e}")
-            return {}, []
+            return {'tokens': [], 'metrics': {}, 'similarity_matrices': {}}
         
         # Forward pass
         self.layer_outputs = {}
@@ -187,14 +262,19 @@ class GeometryAnalyzer:
                 self.model(input_ids)
         except Exception as e:
             logger.error(f"Error during forward pass: {e}", exc_info=True)
-            return {}, tokens
+            return {'tokens': tokens, 'metrics': {}, 'similarity_matrices': {}}
         
-        # Calculate similarity matrices for each layer
+        # Calculate metrics and similarity matrices for each layer
+        metrics = self.compute_token_metrics(input_ids)
         sim_matrices = {}
-        for layer_idx, output in self.layer_outputs.items():
+        
+        # Sort layer indices for consistent processing
+        layer_indices = sorted(self.layer_outputs.keys())
+        
+        for layer_idx in layer_indices:
             try:
                 # Get embeddings for the batch (just one example here)
-                embeddings = output[0]  # [seq_len, hidden_dim]
+                embeddings = self.layer_outputs[layer_idx][0]  # [seq_len, hidden_dim]
                 
                 # Normalize embeddings
                 embeddings_norm = F.normalize(embeddings, p=2, dim=1)
@@ -208,10 +288,77 @@ class GeometryAnalyzer:
                 logger.error(f"Error processing layer {layer_idx}: {e}")
                 continue
         
-        return sim_matrices, tokens
+        return {
+            'tokens': tokens,
+            'metrics': metrics, 
+            'similarity_matrices': sim_matrices
+        }
     
     def cleanup(self) -> None:
         """Remove all hooks to prevent memory leaks."""
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
+
+    def visualize_metrics(self, metrics_dict, title="Token Geometry Analysis", figsize=(14, 10)):
+        """
+        Visualize metrics across layers.
+        
+        Args:
+            metrics_dict: Dictionary with structure from analyze_prompts
+            title: Plot title
+            figsize: Figure size
+        """
+        try:
+            import matplotlib.pyplot as plt
+            
+            # Create figure with multiple subplots
+            fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
+            fig.suptitle(title, fontsize=16)
+            
+            # Get the mean metrics and variances
+            mean_metrics = metrics_dict['mean']
+            var_metrics = metrics_dict['variance']
+            
+            metric_names = ['cosine_sim', 'token_norm', 'update_norm']
+            metric_titles = ['Average Cosine Similarity', 'Average Token Norm', 'Average Update Norm']
+            
+            for i, (metric_name, metric_title) in enumerate(zip(metric_names, metric_titles)):
+                ax = axes[i]
+                
+                # Get the mean values by layer
+                layers = sorted(mean_metrics[metric_name].keys())
+                mean_values = [mean_metrics[metric_name][layer] for layer in layers]
+                
+                # Get corresponding variances
+                var_values = [var_metrics[metric_name].get(layer, 0) for layer in layers]
+                std_values = np.sqrt(var_values)
+                
+                # Plot mean with error bars (standard deviation)
+                ax.errorbar(layers, mean_values, yerr=std_values, marker='o', linestyle='-', 
+                           capsize=4, label=f'{metric_title} across layers')
+                
+                ax.set_ylabel(metric_title)
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                # Add a horizontal line at 0 for context if values might be negative
+                ax.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+                
+                # Set y limits with some padding
+                min_val = np.min(np.array(mean_values) - np.array(std_values))
+                max_val = np.max(np.array(mean_values) + np.array(std_values))
+                padding = (max_val - min_val) * 0.1
+                ax.set_ylim(min_val - padding, max_val + padding)
+            
+            # Configure the x-axis (shared across subplots)
+            axes[-1].set_xlabel('Layer Index')
+            axes[-1].set_xticks(layers)
+            
+            # Adjust layout and save/show
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            
+            return fig
+            
+        except ImportError:
+            logger.warning("Matplotlib not available for visualization.")
+            return None
