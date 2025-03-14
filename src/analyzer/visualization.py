@@ -42,20 +42,21 @@ def plot_token_geometry(metrics: Dict[str, Dict[str, Dict[int, float]]],
         plt.title(title or 'Token Geometry: Average Cosine Similarity Across Layers')
         plt.grid(True, linestyle='--', alpha=0.7)
         
-        # Add annotations for min and max values
-        min_idx = np.argmin(cosine_sims)
-        max_idx = np.argmax(cosine_sims)
-        plt.annotate(f'Min: {cosine_sims[min_idx]:.4f}', 
-                    xy=(layers[min_idx], cosine_sims[min_idx]),
-                    xytext=(10, -20),
-                    textcoords='offset points',
-                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
-        
-        plt.annotate(f'Max: {cosine_sims[max_idx]:.4f}', 
-                    xy=(layers[max_idx], cosine_sims[max_idx]),
-                    xytext=(10, 20),
-                    textcoords='offset points',
-                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
+        # Add annotations for min and max values if there are values to analyze
+        if cosine_sims:  # Check if the list is not empty
+            min_idx = np.argmin(cosine_sims)
+            max_idx = np.argmax(cosine_sims)
+            plt.annotate(f'Min: {cosine_sims[min_idx]:.4f}', 
+                        xy=(layers[min_idx], cosine_sims[min_idx]),
+                        xytext=(10, -20),
+                        textcoords='offset points',
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
+            
+            plt.annotate(f'Max: {cosine_sims[max_idx]:.4f}', 
+                        xy=(layers[max_idx], cosine_sims[max_idx]),
+                        xytext=(10, 20),
+                        textcoords='offset points',
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
         
         plt.tight_layout()
         
@@ -120,20 +121,21 @@ def plot_token_geometry(metrics: Dict[str, Dict[str, Dict[int, float]]],
         ax.set_ylabel(metric_labels.get(metric_name, metric_name))
         ax.grid(True, linestyle='--', alpha=0.7)
         
-        # Add min/max annotations
-        min_idx = np.argmin(values)
-        max_idx = np.argmax(values)
-        ax.annotate(f'Min: {values[min_idx]:.4f}', 
-                  xy=(layers[min_idx], values[min_idx]),
-                  xytext=(10, -20),
-                  textcoords='offset points',
-                  arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
-        
-        ax.annotate(f'Max: {values[max_idx]:.4f}', 
-                  xy=(layers[max_idx], values[max_idx]),
-                  xytext=(10, 20),
-                  textcoords='offset points',
-                  arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
+        # Add min/max annotations only if there are values to analyze
+        if values:  # Check if the list is not empty
+            min_idx = np.argmin(values)
+            max_idx = np.argmax(values)
+            ax.annotate(f'Min: {values[min_idx]:.4f}', 
+                      xy=(layers[min_idx], values[min_idx]),
+                      xytext=(10, -20),
+                      textcoords='offset points',
+                      arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
+            
+            ax.annotate(f'Max: {values[max_idx]:.4f}', 
+                      xy=(layers[max_idx], values[max_idx]),
+                      xytext=(10, 20),
+                      textcoords='offset points',
+                      arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=.2'))
     
     # Set x-axis label on the bottom subplot
     axes[-1].set_xlabel('Layer')

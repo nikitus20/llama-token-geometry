@@ -75,6 +75,7 @@ class CausalSelfAttention(nn.Module):
     
     def __init__(self, config: GPTConfig):
         super().__init__()
+       
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
@@ -93,6 +94,14 @@ class CausalSelfAttention(nn.Module):
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
+        if hasattr(config, 'deeppost') and config.deeppost:
+            self.v_proj.is_deeppost_layer = True
+            self.o_proj.is_deeppost_layer = True
+            # For Q,K matrices
+            self.q_proj.is_deeppost_layer_qk = True
+            self.k_proj.is_deeppost_layer_qk = True
+        elif hasattr(config, 'scale_attn_weights') and config.scale_attn_weights:
+            self.o_proj.is_scaled_layer = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
@@ -137,9 +146,14 @@ class SwiGLU(nn.Module):
         self.act_fn = F.silu
         self.dropout = nn.Dropout(config.dropout)
         
-        # Add scaling flag for matching reference implementation
-        self.scale_output = config.scale_mlp_output if hasattr(config, 'scale_mlp_output') else False
-        
+        # Add flags for specialized initialization
+        if hasattr(config, 'deeppost') and config.deeppost:
+            self.gate_proj.is_deeppost_layer = True
+            self.up_proj.is_deeppost_layer = True
+            self.down_proj.is_deeppost_layer = True
+        elif hasattr(config, 'scale_mlp_output') and config.scale_mlp_output:
+            self.down_proj.is_scaled_layer = True
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
 
@@ -160,6 +174,13 @@ class MLP(nn.Module):
             self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
             self.dropout = nn.Dropout(config.dropout)
             self.forward = self.forward_gelu
+            
+            # Add flag for specialized initialization
+            if hasattr(config, 'deeppost') and config.deeppost:
+                self.c_fc.is_deeppost_layer = True
+                self.c_proj.is_deeppost_layer = True
+            elif hasattr(config, 'scale_mlp_output') and config.scale_mlp_output:
+                self.c_proj.is_scaled_layer = True
 
     def forward_gelu(self, x: torch.Tensor) -> torch.Tensor:
         x = self.c_fc(x)

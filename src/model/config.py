@@ -22,6 +22,9 @@ class GPTConfig:
     norm_eps: float = 1e-6  # Epsilon value for normalization layers
     mixln_split: float = 0.25  # Fraction of layers to use postln in mixln architecture
     initializer_range: float = 0.02  # Standard deviation for weight initialization
+    scale_attn_weights: bool = False
+    scale_mlp_output: bool = False
+    deeppost: bool = False
     
     @property
     def pre_ln(self) -> bool:
