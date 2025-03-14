@@ -34,16 +34,18 @@ def test_model_creation():
     logger.info(f"Using device: {device}")
     
     configurations = [
-        {"name": "LLaMA-PreLN", "pre_ln": True, "use_rms_norm": True, "use_swiglu": True},
-        {"name": "LLaMA-PostLN", "pre_ln": False, "use_rms_norm": True, "use_swiglu": True},
-        {"name": "Standard-PreLN", "pre_ln": True, "use_rms_norm": False, "use_swiglu": False},
-        {"name": "Standard-PostLN", "pre_ln": False, "use_rms_norm": False, "use_swiglu": False}
+        {"name": "LLaMA-PreLN", "ln_type": "preln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-PostLN", "ln_type": "postln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-PeriLN", "ln_type": "periln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-MixLN", "ln_type": "mixln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "Standard-PreLN", "ln_type": "preln", "use_rms_norm": False, "use_swiglu": False},
+        {"name": "Standard-PostLN", "ln_type": "postln", "use_rms_norm": False, "use_swiglu": False}
     ]
     
     for config in configurations:
         logger.info(f"Creating {config['name']} model...")
         model = create_random_model(
-            pre_ln=config["pre_ln"],
+            ln_type=config["ln_type"],
             use_rms_norm=config["use_rms_norm"],
             use_swiglu=config["use_swiglu"],
             n_layer=2,  # Use small model for testing

@@ -132,18 +132,20 @@ def compare_architectures(prompts, output_dir, tokenizer, n_layer=24, device='cu
     # Create models
     models = {}
     
-    # Random models: LLaMA and standard variants
+    # Random models: LLaMA and standard variants with different norm architectures
     configs = [
-        {"name": "LLaMA-PreLN", "pre_ln": True, "use_rms_norm": True, "use_swiglu": True},
-        {"name": "LLaMA-PostLN", "pre_ln": False, "use_rms_norm": True, "use_swiglu": True},
-        {"name": "Standard-PreLN", "pre_ln": True, "use_rms_norm": False, "use_swiglu": False},
-        {"name": "Standard-PostLN", "pre_ln": False, "use_rms_norm": False, "use_swiglu": False}
+        {"name": "LLaMA-PreLN", "ln_type": "preln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-PostLN", "ln_type": "postln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-PeriLN", "ln_type": "periln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "LLaMA-MixLN", "ln_type": "mixln", "use_rms_norm": True, "use_swiglu": True},
+        {"name": "Standard-PreLN", "ln_type": "preln", "use_rms_norm": False, "use_swiglu": False},
+        {"name": "Standard-PostLN", "ln_type": "postln", "use_rms_norm": False, "use_swiglu": False}
     ]
     
     for config in configs:
         logger.info(f"Creating {config['name']} model with {n_layer} layers...")
         models[config["name"]] = create_random_model(
-            pre_ln=config["pre_ln"], 
+            ln_type=config["ln_type"], 
             vocab_size=vocab_size, 
             device=device, 
             n_layer=n_layer,

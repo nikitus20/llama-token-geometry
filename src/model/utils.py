@@ -26,58 +26,55 @@ def get_device() -> str:
     else:
         return 'cpu'
 
-def create_random_model(pre_ln: bool = True, 
-                       vocab_size: Optional[int] = None, 
-                       device: Optional[str] = None, 
-                       n_layer: int = 24,
-                       use_rms_norm: bool = True, 
-                       use_swiglu: bool = True) -> GPT:
+def create_random_model(
+    vocab_size=256, 
+    n_layer=12, 
+    n_head=12, 
+    n_embd=768, 
+    ln_type="postln", 
+    use_initial_ln=True, 
+    mixln_split=0.25, 
+    use_swiglu=True, 
+    device=None
+):
     """
-    Create a randomly initialized model.
+    Create a randomly initialized model with the specified architecture.
     
     Args:
-        pre_ln: Whether to use PreLN architecture
-        vocab_size: Vocabulary size
-        device: Device to place the model on
-        n_layer: Number of transformer layers to use
-        use_rms_norm: Whether to use RMSNorm (LLaMA-style)
-        use_swiglu: Whether to use SwiGLU activation (LLaMA-style)
+        vocab_size: Size of the vocabulary
+        n_layer: Number of transformer layers
+        n_head: Number of attention heads
+        n_embd: Embedding dimension
+        ln_type: Layer normalization architecture (preln, postln, periln, mixln)
+        use_initial_ln: Whether to apply normalization after embeddings
+        mixln_split: Fraction of layers to use postln in mixln architecture
+        use_swiglu: Whether to use SwiGLU activation
+        device: Device to move the model to
         
     Returns:
-        A randomly initialized GPT model
+        Randomly initialized model
     """
-    if vocab_size is None:
-        # Default to BPE vocabulary size if available
-        try:
-            from src.tokenizer.bpe import BPETokenizer
-            if os.path.exists('data/embedding/encoder.json'):
-                tokenizer = BPETokenizer('data/embedding/encoder.json', 'data/embedding/vocab.bpe')
-                vocab_size = tokenizer.vocab_size
-            else:
-                vocab_size = 256  # Default for character-level
-        except Exception as e:
-            logger.error(f"Error creating tokenizer: {e}")
-            vocab_size = 256  # Fallback to character-level
-    
-    # Configure model with specified number of layers
     config = GPTConfig(
-        block_size=256,
         vocab_size=vocab_size,
-        n_layer=n_layer,   # Configurable number of layers
-        n_head=min(12, n_layer),  # Scale attention heads with layers but cap at 12
-        n_embd=384,   # Embedding dimension
-        dropout=0.1,
+        block_size=1024,
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        dropout=0.0,
         bias=False,
-        pre_ln=pre_ln,
-        use_rms_norm=use_rms_norm,
+        ln=ln_type,
+        use_initial_ln=use_initial_ln,
+        mixln_split=mixln_split,
         use_swiglu=use_swiglu,
-        norm_eps=1e-6
+        norm_eps=1e-6,
+        initializer_range=0.02
     )
     
     logger.info(f"Creating model with {n_layer} layers, " +
-               f"{'RMSNorm' if use_rms_norm else 'LayerNorm'}, " +
+               f"RMSNorm, " +
                f"{'SwiGLU' if use_swiglu else 'GELU'}, " +
-               f"{'PreLN' if pre_ln else 'PostLN'} architecture")
+               f"{ln_type.capitalize()} architecture, " +
+               f"{'with' if use_initial_ln else 'without'} initial normalization")
     model = GPT(config)
     
     # Move to specified device if provided
@@ -98,8 +95,11 @@ def get_model_info(model: GPT) -> str:
         String description of the model
     """
     config = model.config
-    return (f"{'LLaMA' if config.use_rms_norm and config.use_swiglu else 'Standard'}-" +
-            f"{'PreLN' if config.pre_ln else 'PostLN'}")
+    norm_type = config.ln.capitalize()
+    # We now always use RMSNorm, so only check for SwiGLU to determine if it's LLaMA-style
+    model_type = 'LLaMA' if config.use_swiglu else 'Standard'
+    initial = '+Initial' if config.use_initial_ln else ''
+    return f"{model_type}-{norm_type}{initial}"
 
 
 def get_available_models(models_dir: str = "saved_models") -> list:

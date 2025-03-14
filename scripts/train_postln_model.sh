@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # This script downloads Wikitext-2 and trains a PostLN model with perplexity evaluation
+# With the updated codebase, it now supports different layer normalization architectures
 
 # First, download Wikitext-2 if not already present
 if [ ! -f "data/wikitext-2/train.txt" ]; then
@@ -28,6 +29,7 @@ python scripts/train.py \
     --data-dir data/wikitext-2 \
     --output-dir saved_models \
     --model-name postln_wikitext_model \
+    --ln postln \
     --n-layer 6 \
     --n-head 6 \
     --n-embd 384 \

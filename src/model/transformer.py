@@ -11,7 +11,7 @@ import logging
 from typing import Tuple, Optional, Dict, Any
 
 from src.model.config import GPTConfig
-from src.model.layers import LayerNorm, RMSNorm, Block
+from src.model.layers import RMSNorm, Block
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +34,13 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
         ))
         
-        # Choose final normalization layer based on config
-        if config.use_rms_norm:
-            self.transformer.ln_f = RMSNorm(config.n_embd, eps=config.norm_eps)
-        else:
-            self.transformer.ln_f = LayerNorm(config.n_embd, bias=config.bias, eps=config.norm_eps)
+        # Always use RMSNorm for final normalization layer
+        self.transformer.ln_f = RMSNorm(config.n_embd, eps=config.norm_eps)
         
-        # Add an additional normalization layer after embeddings but before blocks for pre-ln architectures
-        if not config.pre_ln:
-            if config.use_rms_norm:
-                self.transformer.ln_emb = RMSNorm(config.n_embd, eps=config.norm_eps)
-            else:
-                self.transformer.ln_emb = LayerNorm(config.n_embd, bias=config.bias, eps=config.norm_eps)
-            logger.info("Added additional normalization layer after embeddings for pre-ln architecture")
+        # Add an initial normalization layer after embeddings for all architectures
+        if config.use_initial_ln:
+            self.transformer.ln_emb = RMSNorm(config.n_embd, eps=config.norm_eps)
+            logger.info(f"Added initial normalization layer after embeddings for {config.ln} architecture")
             
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # tie weights
@@ -72,14 +66,31 @@ class GPT(nn.Module):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
-    def _init_weights(self, module: nn.Module):
-        """Initialize model weights."""
+    
+    def _init_weights(self, module):
+        config = self.config
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            std = config.initializer_range
+            if hasattr(module, 'is_deeppost_layer') and module.is_deeppost_layer:
+                # Special initialization for deeppost layers
+                torch.nn.init.xavier_normal_(module.weight, gain=(config.n_layer * 8) ** 0.25)
+            elif hasattr(module, 'is_scaled_layer') and module.is_scaled_layer:
+                # Scaled initialization for certain layers
+                scaled_std = std / (2 * config.n_layer) ** 0.5
+                torch.nn.init.normal_(module.weight, mean=0.0, std=scaled_std)
+            else:
+                # Standard initialization
+                torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+        
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            std = config.initializer_range
+            # Use the same standard deviation as other layers
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
 
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
@@ -102,8 +113,8 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         
-        # Apply additional normalization layer after embeddings for post-ln architecture
-        if not self.config.pre_ln and hasattr(self.transformer, 'ln_emb'):
+        # Apply initial normalization layer after embeddings if configured
+        if self.config.use_initial_ln and hasattr(self.transformer, 'ln_emb'):
             x = self.transformer.ln_emb(x)
         
         for block in self.transformer.h:

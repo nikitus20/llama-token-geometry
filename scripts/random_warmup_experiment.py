@@ -3,7 +3,8 @@ Experiment to analyze the effect of warming up a model with random data.
 
 This script:
 1. Creates a random dataset
-2. Warms up a PostLN model on this random data
+2. Warms up a PreLN model without initial normalization on this random data
+   (architecture is configurable via --ln and --use-initial-ln parameters)
 3. Analyzes the token geometry before and after warmup
 """
 
@@ -459,6 +460,14 @@ def main():
                       help='Number of attention heads')
     parser.add_argument('--n-embd', type=int, default=384,
                       help='Embedding dimension')
+    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln'], default='preln',
+                      help='Layer normalization architecture (default: preln)')
+    parser.add_argument('--use-initial-ln', action='store_true',
+                      help='Enable initial layer normalization after embeddings (disabled by default)')
+    parser.add_argument('--mixln-split', type=float, default=0.25,
+                      help='Fraction of layers to use postln in mixln architecture (default: 0.25)')
+    parser.add_argument('--no-swiglu', action='store_true',
+                      help='Use GELU activation instead of SwiGLU')
     
     # Training arguments
     parser.add_argument('--iterations', type=int, default=100,
@@ -496,8 +505,8 @@ def main():
     if args.prompt is None:
         args.prompt = "This is a test prompt for analyzing the effect of random data warmup on token geometry in transformer models."
     
-    # Create initial model (PostLN architecture)
-    logger.info("Creating initial model...")
+    # Create initial model with specified architecture
+    logger.info(f"Creating initial model with {args.ln} architecture...")
     config = GPTConfig(
         vocab_size=vocab_size,
         block_size=args.seq_length,
@@ -506,12 +515,16 @@ def main():
         n_embd=args.n_embd,
         dropout=0.1,
         bias=False,
-        pre_ln=False,  # Use PostLN architecture
-        use_rms_norm=True,  # LLaMA-style normalization
-        use_swiglu=True    # LLaMA-style activation
+        ln=args.ln,
+        use_initial_ln=args.use_initial_ln,
+        mixln_split=args.mixln_split,
+        use_swiglu=not args.no_swiglu,
+        initializer_range=0.02  # Add standard deviation for weight initialization
     )
     model = GPT(config)
     logger.info(f"Created model with {model.get_num_params()/1e6:.2f}M parameters")
+    logger.info(f"Architecture: {args.ln.capitalize()}, RMSNorm, {'SwiGLU' if not args.no_swiglu else 'GELU'}, "
+               f"{'with' if args.use_initial_ln else 'without'} initial normalization")
     
     # Save initial model
     initial_model_path = os.path.join(args.output_dir, "initial_model")

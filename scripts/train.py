@@ -308,12 +308,17 @@ def main():
     
     # Model arguments
     model_group = parser.add_argument_group('Model')
-    model_group.add_argument('--pre-ln', action='store_true',
-                          help='Use Pre-LN architecture (default: Post-LN)')
-    model_group.add_argument('--use-rms-norm', action='store_true',
-                          help='Use RMSNorm instead of LayerNorm')
+    model_group.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln'], default='postln',
+                          help='Layer normalization architecture (default: postln)')
+    model_group.add_argument('--no-initial-ln', action='store_true',
+                          help='Disable initial layer normalization after embeddings')
+    model_group.add_argument('--mixln-split', type=float, default=0.25,
+                          help='Fraction of layers to use postln in mixln architecture (default: 0.25)')
     model_group.add_argument('--use-swiglu', action='store_true',
                           help='Use SwiGLU activation instead of GELU')
+    # Keep pre-ln flag for backward compatibility
+    model_group.add_argument('--pre-ln', action='store_true',
+                          help='Use Pre-LN architecture (equivalent to --ln=preln, deprecated)')
     model_group.add_argument('--n-layer', type=int, default=6,
                           help='Number of transformer layers')
     model_group.add_argument('--n-head', type=int, default=6,
@@ -400,6 +405,12 @@ def main():
             val_size = len(dataset) - train_size
             train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     
+    # Handle deprecated pre-ln flag
+    ln_type = args.ln
+    if args.pre_ln:
+        ln_type = "preln"
+        logger.warning("--pre-ln flag is deprecated, use --ln=preln instead")
+    
     # Create model
     config = GPTConfig(
         vocab_size=tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else 256,
@@ -409,17 +420,20 @@ def main():
         n_embd=args.n_embd,
         dropout=0.1,
         bias=False,
-        pre_ln=args.pre_ln,
-        use_rms_norm=args.use_rms_norm,
-        use_swiglu=args.use_swiglu
+        ln=ln_type,
+        use_initial_ln=not args.no_initial_ln,
+        mixln_split=args.mixln_split,
+        use_swiglu=args.use_swiglu,
+        initializer_range=0.02  # Add standard deviation for weight initialization
     )
     
     model = GPT(config)
     
     logger.info(f"Created model with {model.get_num_params()/1e6:.2f}M parameters")
-    logger.info(f"Architecture: {'PreLN' if args.pre_ln else 'PostLN'}, "
-               f"{'RMSNorm' if args.use_rms_norm else 'LayerNorm'}, "
-               f"{'SwiGLU' if args.use_swiglu else 'GELU'}")
+    logger.info(f"Architecture: {ln_type.capitalize()}, "
+               f"RMSNorm, "
+               f"{'SwiGLU' if args.use_swiglu else 'GELU'}, "
+               f"{'with' if not args.no_initial_ln else 'without'} initial normalization")
     
     # Train model
     train(

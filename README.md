@@ -6,7 +6,7 @@ This project analyzes token representations in transformer models with LLaMA-ins
 
 - Configurable transformer model with support for:
   - PreLN or PostLN architecture
-  - RMSNorm or LayerNorm
+  - RMSNorm normalization
   - SwiGLU or GELU activation functions
 
 - Token geometry analysis showing how token representations evolve through network layers
@@ -75,7 +75,6 @@ python scripts/train.py --dataset wikitext --data-dir data/wikitext-2 \
 
 Available training options:
 - `--pre-ln`: Use Pre-LN architecture (default is Post-LN)
-- `--use-rms-norm`: Use RMSNorm instead of LayerNorm
 - `--use-swiglu`: Use SwiGLU activation instead of GELU
 - `--tokenizer`: Choose tokenizer (tiktoken, bpe, or char)
 
@@ -128,8 +127,8 @@ The project supports several architectural variants:
 
 - LLaMA-PreLN: RMSNorm + SwiGLU activation with Pre-LN architecture
 - LLaMA-PostLN: RMSNorm + SwiGLU activation with Post-LN architecture
-- Standard-PreLN: LayerNorm + GELU activation with Pre-LN architecture
-- Standard-PostLN: LayerNorm + GELU activation with Post-LN architecture
+- Standard-PreLN: RMSNorm + GELU activation with Pre-LN architecture
+- Standard-PostLN: RMSNorm + GELU activation with Post-LN architecture
 
 ## Interpreting Results
 

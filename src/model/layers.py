@@ -13,10 +13,16 @@ from src.model.config import GPTConfig
 logger = logging.getLogger(__name__)
 
 class LayerNorm(nn.Module):
-    """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False."""
+    """
+    LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False.
+    
+    Note: This class is kept for backward compatibility but is deprecated.
+    The codebase now uses RMSNorm exclusively.
+    """
 
     def __init__(self, ndim: int, bias: bool, eps: float = 1e-5):
         super().__init__()
+        logger.warning("LayerNorm is deprecated and will be removed in a future version. Use RMSNorm instead.")
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
         self.eps = eps
@@ -43,6 +49,23 @@ class RMSNorm(nn.Module):
         # Scale with learned parameters
         return self.weight * x_norm
 
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, dtype=torch.float)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
+        self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
+        
+    def forward(self, x, seq_len=None):
+        return (
+            self.cos_cached[:, :, :seq_len, ...],
+            self.sin_cached[:, :, :seq_len, ...],
+        )
 
 class CausalSelfAttention(nn.Module):
     """
@@ -72,54 +95,53 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
-
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        B, T, C = x.size()
+        
+        # Calculate query, key, values 
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        
+        # Apply rotary embeddings if enabled
+        if hasattr(self, 'rotary_emb'):
+            position_ids = torch.arange(T, device=x.device)
+            position_ids = position_ids.unsqueeze(0).expand(B, -1)
+            cos, sin = self.rotary_emb(v, seq_len=T)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
+        
+        # Use scaled_dot_product_attention when available
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
-            # manual implementation of attention
+            # Manual implementation
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
-            y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
-        # output projection
+            y = att @ v
+            
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return y
 
 
 class SwiGLU(nn.Module):
-    """
-    SwiGLU activation function as used in LLaMA.
-    Implementation based on the LLaMA and PaLM papers.
-    """
     def __init__(self, config: GPTConfig):
         super().__init__()
-        # Determine the intermediate size (8/3 is used in LLaMA for SwiGLU)
-        intermediate_size = config.intermediate_size
-        
-        # Gate and up-projection
-        self.w1 = nn.Linear(config.n_embd, intermediate_size, bias=config.bias)
-        self.w3 = nn.Linear(config.n_embd, intermediate_size, bias=config.bias)
-        # Down-projection
-        self.w2 = nn.Linear(intermediate_size, config.n_embd, bias=config.bias)
+        self.gate_proj = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
+        self.up_proj = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
+        self.down_proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+        self.act_fn = F.silu
         self.dropout = nn.Dropout(config.dropout)
-
+        
+        # Add scaling flag for matching reference implementation
+        self.scale_output = config.scale_mlp_output if hasattr(config, 'scale_mlp_output') else False
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # SwiGLU activation: x = (xW1) * SiLU(xW3)
-        return self.dropout(self.w2(self.w1(x) * F.silu(self.w3(x))))
-
+        return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
 
 class MLP(nn.Module):
     """
@@ -152,37 +174,68 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
     """
-    Transformer block with support for both PreLN and PostLN architecture
-    and either LayerNorm or RMSNorm.
+    Transformer block with support for different LN architectures:
+    - preln: Pre-LN architecture (normalization before attention and MLP)
+    - postln: Post-LN architecture (normalization after residual connections)
+    - periln: Both pre and post normalization
+    - mixln: Post-LN in early layers, Pre-LN in later layers
+    
+    Uses RMSNorm for all normalization layers.
     """
     
     def __init__(self, config: GPTConfig, block_idx: int):
         super().__init__()
-        self.pre_ln = config.pre_ln
+        self.ln_type = config.ln
         self.block_idx = block_idx
+        self.n_layer = config.n_layer
+        self.mixln_split_layer = int(config.n_layer * config.mixln_split)
         
-        # Choose normalization type based on config
-        norm_class = RMSNorm if config.use_rms_norm else LayerNorm
+        # Always use RMSNorm
+        self.ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
         
-        if config.use_rms_norm:
-            # RMSNorm doesn't use bias
-            self.ln_1 = norm_class(config.n_embd, eps=config.norm_eps)
-            self.ln_2 = norm_class(config.n_embd, eps=config.norm_eps)
-        else:
-            # LayerNorm with configurable bias
-            self.ln_1 = norm_class(config.n_embd, bias=config.bias, eps=config.norm_eps)
-            self.ln_2 = norm_class(config.n_embd, bias=config.bias, eps=config.norm_eps)
+        # For periln, we need additional norm layers
+        if self.ln_type == "periln":
+            self.post_ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
+            self.post_ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
 
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.pre_ln:
+        if self.ln_type == "preln":
             # PreLN architecture (used in LLaMA and most modern transformers)
             x = x + self.attn(self.ln_1(x))
             x = x + self.mlp(self.ln_2(x))
-        else:
+        elif self.ln_type == "postln":
             # PostLN architecture (used in original transformer paper)
             x = self.ln_1(x + self.attn(x))
             x = self.ln_2(x + self.mlp(x))
+        elif self.ln_type == "periln":
+            # PeriLN architecture (both pre and post normalization)
+            # Pre-norm first
+            attn_output = self.attn(self.ln_1(x))
+            x = x + attn_output
+            # Post-norm after residual
+            x = self.post_ln_1(x)
+            # Pre-norm again for MLP
+            mlp_output = self.mlp(self.ln_2(x))
+            x = x + mlp_output
+            # Post-norm after residual
+            x = self.post_ln_2(x)
+        elif self.ln_type == "mixln":
+            # MixLN architecture (postln in first layers, preln in later layers)
+            if self.block_idx < self.mixln_split_layer:
+                # PostLN in early layers
+                x = self.ln_1(x + self.attn(x))
+                x = self.ln_2(x + self.mlp(x))
+            else:
+                # PreLN in later layers
+                x = x + self.attn(self.ln_1(x))
+                x = x + self.mlp(self.ln_2(x))
+        else:
+            raise ValueError(f"Unknown layernorm type: {self.ln_type}")
+            
         return x
+    
+

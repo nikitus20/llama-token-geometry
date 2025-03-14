@@ -74,36 +74,40 @@ def create_tiktoken_tokenizer():
         logger.info("Falling back to character tokenizer")
         return CharTokenizer(256)
 
-def create_model(vocab_size, n_layer=12, use_rms_norm=True, use_swiglu=True, pre_ln=False):
+def create_model(vocab_size, n_layer=12, use_swiglu=True, ln_type="postln", use_initial_ln=True, mixln_split=0.25):
     """
-    Create a model with the specified architecture.
+    Create a GPT model with the specified parameters.
     
     Args:
-        vocab_size: Vocabulary size
-        n_layer: Number of layers
-        use_rms_norm: Whether to use RMSNorm
-        use_swiglu: Whether to use SwiGLU
-        pre_ln: Whether to use PreLN architecture
+        vocab_size: Size of the vocabulary
+        n_layer: Number of transformer layers
+        use_swiglu: Whether to use SwiGLU activation
+        ln_type: Layer normalization type (preln, postln, periln, mixln)
+        use_initial_ln: Whether to use initial layer normalization
+        mixln_split: Fraction of layers to use postln in mixln architecture
         
     Returns:
-        The created model
+        GPT model
     """
     config = GPTConfig(
         vocab_size=vocab_size,
-        block_size=256,
+        block_size=1024,
         n_layer=n_layer,
         n_head=8,
-        n_embd=384,
-        dropout=0.,
+        n_embd=512,
+        dropout=0.0,
         bias=False,
-        pre_ln=pre_ln,
-        use_rms_norm=use_rms_norm,
-        use_swiglu=use_swiglu
+        ln=ln_type,
+        use_initial_ln=use_initial_ln,
+        mixln_split=mixln_split,
+        use_swiglu=use_swiglu,
+        initializer_range=0.02  # Add standard deviation for weight initialization
     )
     
-    model_type = "LLaMA-PostLN" if use_rms_norm and use_swiglu and not pre_ln else "Custom"
-    logger.info(f"Creating {model_type} model with {n_layer} layers")
-    return GPT(config)
+    model_type = "LLaMA" if use_swiglu else "Standard"
+    model_name = f"{model_type}-{ln_type.capitalize()}"
+    
+    return GPT(config), model_name
 
 def train_for_iterations(model, dataset, iterations=100, batch_size=8, 
                         learning_rate=1e-5, device='cuda'):
@@ -459,6 +463,12 @@ def main():
                        help='Batch size for training')
     parser.add_argument('--layers', type=int, default=6,
                        help='Number of transformer layers')
+    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln'], default='postln',
+                       help='Layer normalization architecture (default: postln)')
+    parser.add_argument('--no-initial-ln', action='store_true',
+                       help='Disable initial layer normalization after embeddings')
+    parser.add_argument('--mixln-split', type=float, default=0.25,
+                       help='Fraction of layers to use postln in mixln architecture (default: 0.25)')
     parser.add_argument('--output-dir', type=str, default='outputs/geometry_evolution',
                        help='Output directory')
     parser.add_argument('--prompt', type=str, 
@@ -485,13 +495,14 @@ def main():
     logger.info(f"Loading dataset from {train_file}")
     dataset = WikiTextDataset(train_file, tokenizer, block_size=128)
     
-    # Create model - PostLN LLaMA-style (with RMSNorm)
-    model = create_model(
+    # Create model with selected LN style
+    model, model_name = create_model(
         vocab_size=tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else 50257,
         n_layer=args.layers,
-        use_rms_norm=True,  # RMSNorm (LLaMA-style)
         use_swiglu=True,    # SwiGLU (LLaMA-style)
-        pre_ln=False        # PostLN
+        ln_type=args.ln,
+        use_initial_ln=not args.no_initial_ln,
+        mixln_split=args.mixln_split
     )
     
     # Save initial model
