@@ -195,13 +195,7 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
     """
-    Transformer block with support for different LN architectures:
-    - preln: Pre-LN architecture (normalization before attention and MLP)
-    - postln: Post-LN architecture (normalization after residual connections)
-    - periln: Both pre and post normalization
-    - mixln: Post-LN in early layers, Pre-LN in later layers
-    
-    Uses RMSNorm for all normalization layers.
+    Transformer block with support for different LN architectures.
     """
     
     def __init__(self, config: GPTConfig, block_idx: int):
@@ -222,41 +216,46 @@ class Block(nn.Module):
 
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        
+        # Set the forward method based on architecture type
         if self.ln_type == "preln":
-            # PreLN architecture (used in LLaMA and most modern transformers)
-            x = x + self.attn(self.ln_1(x))
-            x = x + self.mlp(self.ln_2(x))
+            self.forward = self._forward_preln
         elif self.ln_type == "postln":
-            # PostLN architecture (used in original transformer paper)
-            x = self.ln_1(x + self.attn(x))
-            x = self.ln_2(x + self.mlp(x))
+            self.forward = self._forward_postln
         elif self.ln_type == "periln":
-            # PeriLN architecture (both pre and post normalization)
-            # Pre-norm first
-            attn_output = self.attn(self.ln_1(x))
-            x = x + attn_output
-            # Post-norm after residual
-            x = self.post_ln_1(x)
-            # Pre-norm again for MLP
-            mlp_output = self.mlp(self.ln_2(x))
-            x = x + mlp_output
-            # Post-norm after residual
-            x = self.post_ln_2(x)
+            self.forward = self._forward_periln
         elif self.ln_type == "mixln":
-            # MixLN architecture (postln in first layers, preln in later layers)
             if self.block_idx < self.mixln_split_layer:
-                # PostLN in early layers
-                x = self.ln_1(x + self.attn(x))
-                x = self.ln_2(x + self.mlp(x))
+                self.forward = self._forward_postln
             else:
-                # PreLN in later layers
-                x = x + self.attn(self.ln_1(x))
-                x = x + self.mlp(self.ln_2(x))
+                self.forward = self._forward_preln
         else:
             raise ValueError(f"Unknown layernorm type: {self.ln_type}")
-            
+
+    def _forward_preln(self, x: torch.Tensor) -> torch.Tensor:
+        """PreLN architecture (used in LLaMA and most modern transformers)"""
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+        
+    def _forward_postln(self, x: torch.Tensor) -> torch.Tensor:
+        """PostLN architecture (used in original transformer paper)"""
+        x = self.ln_1(x + self.attn(x))
+        x = self.ln_2(x + self.mlp(x))
+        return x
+        
+    def _forward_periln(self, x: torch.Tensor) -> torch.Tensor:
+        """PeriLN architecture (both pre and post normalization)"""
+        # Pre-norm first
+        attn_output = self.attn(self.ln_1(x))
+        x = x + attn_output
+        # Post-norm after residual
+        x = self.post_ln_1(x)
+        # Pre-norm again for MLP
+        mlp_output = self.mlp(self.ln_2(x))
+        x = x + mlp_output
+        # Post-norm after residual
+        x = self.post_ln_2(x)
         return x
     
 

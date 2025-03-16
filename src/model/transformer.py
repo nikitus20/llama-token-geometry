@@ -69,13 +69,17 @@ class GPT(nn.Module):
     
     def _init_weights(self, module):
         config = self.config
+        std = config.initializer_range
+        
         if isinstance(module, nn.Linear):
-            std = config.initializer_range
+            # Special initialization for deeppost layers
             if hasattr(module, 'is_deeppost_layer') and module.is_deeppost_layer:
-                # Special initialization for deeppost layers
                 torch.nn.init.xavier_normal_(module.weight, gain=(config.n_layer * 8) ** 0.25)
+            # Special initialization for Q,K matrices in attention
+            elif hasattr(module, 'is_deeppost_layer_qk') and module.is_deeppost_layer_qk:
+                torch.nn.init.xavier_normal_(module.weight, gain=1)
+            # Scaled initialization for certain layers (output projections)
             elif hasattr(module, 'is_scaled_layer') and module.is_scaled_layer:
-                # Scaled initialization for certain layers
                 scaled_std = std / (2 * config.n_layer) ** 0.5
                 torch.nn.init.normal_(module.weight, mean=0.0, std=scaled_std)
             else:
@@ -86,9 +90,8 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         
         elif isinstance(module, nn.Embedding):
-            std = config.initializer_range
-            # Use the same standard deviation as other layers
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            # LLaMA uses a specific scaling for embeddings
+            module.weight.data.normal_(mean=0.0, std=(2 / 5) ** 0.5)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
 
