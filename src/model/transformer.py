@@ -11,14 +11,16 @@ import logging
 from typing import Tuple, Optional, Dict, Any
 
 from src.model.config import GPTConfig
-from src.model.layers import RMSNorm, Block
+from src.model.layers import RMSNorm, LlamaStyleBlock
 
 logger = logging.getLogger(__name__)
 
+# Update src/model/transformer.py
+
 class GPT(nn.Module):
     """
-    GPT-style transformer model with configurable architecture.
-    Supports LLaMA-style configurations with RMSNorm and SwiGLU.
+    GPT-style transformer model with LLaMA architecture components.
+    Supports various normalization methods.
     """
     
     def __init__(self, config: GPTConfig):
@@ -29,9 +31,8 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
+            h = nn.ModuleList([LlamaStyleBlock(config, i) for i in range(config.n_layer)]),
         ))
         
         # Always use RMSNorm for final normalization layer
@@ -50,7 +51,7 @@ class GPT(nn.Module):
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight') or pn.endswith('w2.weight'):
+            if pn.endswith('down_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # report number of parameters
@@ -59,11 +60,10 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding: bool = True) -> int:
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
+            n_params -= self.transformer.wte.weight.numel()
         return n_params
 
     
@@ -109,12 +109,11 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        # Forward pass through embedding layer
+        # Note: No position embeddings - using rotary embeddings in attention instead
+        x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        x = self.transformer.drop(x)
         
         # Apply initial normalization layer after embeddings if configured
         if self.config.use_initial_ln and hasattr(self.transformer, 'ln_emb'):

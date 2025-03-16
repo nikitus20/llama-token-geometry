@@ -5,6 +5,8 @@ Configuration classes for transformer models.
 from dataclasses import dataclass
 from typing import Literal, Union
 
+# Update src/model/config.py
+
 @dataclass
 class GPTConfig:
     """Configuration for the GPT model with LLaMA-style architecture options."""
@@ -25,6 +27,10 @@ class GPTConfig:
     scale_attn_weights: bool = False
     scale_mlp_output: bool = False
     deeppost: bool = False
+    
+    # Added LLaMA-specific parameters
+    max_position_embeddings: int = 2048  # Maximum sequence length for rotary embeddings
+    rope_base: int = 10000  # Base for rotary embeddings
     
     @property
     def pre_ln(self) -> bool:

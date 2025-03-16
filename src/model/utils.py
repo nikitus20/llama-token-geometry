@@ -34,7 +34,9 @@ def create_random_model(
     ln_type="postln", 
     use_initial_ln=True, 
     mixln_split=0.25, 
-    use_swiglu=True, 
+    use_swiglu=True,
+    max_position_embeddings=2048,
+    rope_base=10000,
     device=None
 ):
     """
@@ -49,6 +51,8 @@ def create_random_model(
         use_initial_ln: Whether to apply normalization after embeddings
         mixln_split: Fraction of layers to use postln in mixln architecture
         use_swiglu: Whether to use SwiGLU activation
+        max_position_embeddings: Maximum sequence length for rotary embeddings
+        rope_base: Base for rotary embeddings
         device: Device to move the model to
         
     Returns:
@@ -67,14 +71,18 @@ def create_random_model(
         mixln_split=mixln_split,
         use_swiglu=use_swiglu,
         norm_eps=1e-6,
-        initializer_range=0.02
+        initializer_range=0.02,
+        max_position_embeddings=max_position_embeddings,
+        rope_base=rope_base
     )
     
     logger.info(f"Creating model with {n_layer} layers, " +
+               f"LLaMA-style, " +
                f"RMSNorm, " +
                f"{'SwiGLU' if use_swiglu else 'GELU'}, " +
                f"{ln_type.capitalize()} architecture, " +
-               f"{'with' if use_initial_ln else 'without'} initial normalization")
+               f"{'with' if use_initial_ln else 'without'} initial normalization, " +
+               f"RoPE (max_len={max_position_embeddings}, base={rope_base})")
     model = GPT(config)
     
     # Move to specified device if provided

@@ -23,17 +23,20 @@ fi
 echo "Using device: $DEVICE"
 
 # Train PostLN model with Wikitext-2 and perplexity evaluation
-echo "Training PostLN model with Wikitext-2..."
+echo "Training LLaMA-style PostLN model with Wikitext-2..."
 python scripts/train.py \
     --dataset wikitext \
     --data-dir data/wikitext-2 \
     --output-dir saved_models \
-    --model-name postln_wikitext_model \
+    --model-name llama_postln_wikitext_model \
     --ln postln \
     --n-layer 6 \
     --n-head 6 \
     --n-embd 384 \
     --block-size 256 \
+    --use-swiglu \
+    --max-position-embeddings 2048 \
+    --rope-base 10000 \
     --max-steps 1000 \
     --warmup-steps 100 \
     --save-interval 200 \

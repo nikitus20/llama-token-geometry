@@ -325,6 +325,11 @@ def main():
                           help='Number of attention heads')
     model_group.add_argument('--n-embd', type=int, default=384,
                           help='Embedding dimension')
+    # Add LLaMA-specific parameters
+    model_group.add_argument('--max-position-embeddings', type=int, default=2048,
+                          help='Maximum sequence length for rotary embeddings')
+    model_group.add_argument('--rope-base', type=int, default=10000,
+                          help='Base for rotary embeddings')
     
     # Training arguments
     train_group = parser.add_argument_group('Training')
@@ -424,16 +429,19 @@ def main():
         use_initial_ln=not args.no_initial_ln,
         mixln_split=args.mixln_split,
         use_swiglu=args.use_swiglu,
-        initializer_range=0.02  # Add standard deviation for weight initialization
+        initializer_range=0.02,  # Standard deviation for weight initialization
+        max_position_embeddings=args.max_position_embeddings,
+        rope_base=args.rope_base
     )
     
     model = GPT(config)
     
     logger.info(f"Created model with {model.get_num_params()/1e6:.2f}M parameters")
-    logger.info(f"Architecture: {ln_type.capitalize()}, "
+    logger.info(f"Architecture: LLaMA-style, {ln_type.capitalize()}, "
                f"RMSNorm, "
                f"{'SwiGLU' if args.use_swiglu else 'GELU'}, "
-               f"{'with' if not args.no_initial_ln else 'without'} initial normalization")
+               f"{'with' if not args.no_initial_ln else 'without'} initial normalization, "
+               f"RoPE (max_len={args.max_position_embeddings}, base={args.rope_base})")
     
     # Train model
     train(
