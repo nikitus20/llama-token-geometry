@@ -9,6 +9,7 @@ import random
 import argparse
 import logging
 import numpy as np
+import csv
 from pathlib import Path
 
 import torch
@@ -20,7 +21,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.cuda.amp import autocast, GradScaler
 from torch.nn.parallel import DistributedDataParallel
-
+from datetime import datetime
 # Import your custom model
 from src.model.config import GPTConfig
 from src.model.transformer import GPT
@@ -374,7 +375,23 @@ def main():
     save_dir = Path(args.save_dir)
     if is_main_process:
         save_dir.mkdir(parents=True, exist_ok=True)
+        # Create CSV files for tracking metrics
+        metrics_dir = os.path.join(save_dir, "metrics")
+        os.makedirs(metrics_dir, exist_ok=True)
+        
+        # Training metrics file
+        train_metrics_file = os.path.join(metrics_dir, "train_metrics.csv")
+        with open(train_metrics_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "loss", "learning_rate", "tokens_seen", "timestamp"])
+        
+        # Validation metrics file
+        val_metrics_file = os.path.join(metrics_dir, "val_metrics.csv")
+        with open(val_metrics_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "perplexity", "tokens_seen", "timestamp"])
     
+
     # Get device
     device = get_device(args)
     
@@ -587,6 +604,16 @@ def main():
             # Track loss
             epoch_loss += loss.item() * args.gradient_accumulation
             
+            if is_main_process and update_step % 10 == 0:  # Adjust frequency as needed
+                with open(train_metrics_file, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        update_step, 
+                        epoch_loss / (batch_idx + 1),
+                        scheduler.get_last_lr()[0],
+                        tokens_seen,
+                        datetime.now().isoformat()
+                    ])
             # Only update weights and learning rate at the specified interval
             if (global_step + 1) % args.gradient_accumulation == 0:
                 # Gradient clipping
@@ -630,6 +657,15 @@ def main():
                         f"| Tokens: {tokens_seen / 1e6:.2f}M"
                     )
                     
+                    if is_main_process:
+                        with open(val_metrics_file, 'a', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                update_step, 
+                                val_perplexity,
+                                tokens_seen,
+                                datetime.now().isoformat()
+                            ])
                     # Save best model
                     if is_main_process and val_perplexity < best_val_loss:
                         best_val_loss = val_perplexity
