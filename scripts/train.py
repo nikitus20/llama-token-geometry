@@ -254,7 +254,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a LLaMA-style model')
     
     # Model arguments
-    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln'], default='preln',
+    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln', 'predyt', 'postdyt'], default='preln',
                        help='Layer normalization architecture')
     parser.add_argument('--n-layer', type=int, default=12,
                        help='Number of transformer layers')

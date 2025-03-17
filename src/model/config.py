@@ -17,7 +17,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = False  # True: bias in Linears, False: a bit better and faster
-    ln: Union[Literal["preln", "postln", "periln", "mixln"], str] = "preln"  # Normalization architecture type
+    ln: Union[Literal["preln", "postln", "periln", "mixln", "predyt", "postdyt"], str] = "preln"  # Normalization architecture type
     use_initial_ln: bool = True  # Whether to apply normalization after embeddings
     use_swiglu: bool = True  # Use SwiGLU activation (LLaMA-style) instead of GELU
     intermediate_size: int = None  # Size of the intermediate layer in MLP, None = auto-compute based on n_embd

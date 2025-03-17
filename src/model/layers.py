@@ -48,6 +48,23 @@ class RMSNorm(nn.Module):
         x_norm = x / rms
         # Scale with learned parameters
         return self.weight * x_norm
+    
+
+class DyT(nn.Module):
+    """
+    Dynamic Tanh normalization.
+    Applies a scaled tanh function to the input without token aggregation.
+    """
+    def __init__(self, dim, init_alpha=1.0, eps=1e-6):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.ones(1) * init_alpha)
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.eps = eps  # Added for consistency with other norm layers
+        
+    def forward(self, x):
+        x = torch.tanh(self.alpha * x)
+        return self.gamma * x
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000):
@@ -199,7 +216,7 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
     """
-    Transformer block with support for different LN architectures.
+    Transformer block with support for different normalization architectures.
     """
     
     def __init__(self, config: GPTConfig, block_idx: int):
@@ -208,47 +225,60 @@ class Block(nn.Module):
         self.block_idx = block_idx
         self.n_layer = config.n_layer
         self.mixln_split_layer = int(config.n_layer * config.mixln_split)
+        self.norm_eps = getattr(config, "norm_eps", 1e-6)
         
-        # Always use RMSNorm
-        self.ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
-        self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        # Choose normalization based on config
+        init_alpha = getattr(config, "dyt_init_alpha", 1.0)
         
-        # For periln, we need additional norm layers
-        if self.ln_type == "periln":
-            self.post_ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
-            self.post_ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        # Create normalization layers
+        if self.ln_type in ["predyt"]:
+            self.ln_1 = DyT(config.n_embd, init_alpha=init_alpha)
+            self.ln_2 = DyT(config.n_embd, init_alpha=init_alpha)
+        elif self.ln_type in ["postdyt"]:
+            self.post_ln_1 = DyT(config.n_embd, init_alpha=init_alpha)
+            self.post_ln_2 = DyT(config.n_embd, init_alpha=init_alpha)
+        else:
+            # Always use RMSNorm for other architectures
+            if self.ln_type in ["preln", "periln"] or (self.ln_type == "mixln" and block_idx >= self.mixln_split_layer):
+                self.ln_1 = RMSNorm(config.n_embd, eps=self.norm_eps)
+                self.ln_2 = RMSNorm(config.n_embd, eps=self.norm_eps)
+            
+            # For periln, we need additional norm layers
+            if self.ln_type == "periln" or (self.ln_type == "mixln" and block_idx < self.mixln_split_layer) or self.ln_type == "postln":
+                self.post_ln_1 = RMSNorm(config.n_embd, eps=self.norm_eps)
+                self.post_ln_2 = RMSNorm(config.n_embd, eps=self.norm_eps)
 
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
         
         # Set the forward method based on architecture type
-        if self.ln_type == "preln":
-            self.forward = self._forward_preln
-        elif self.ln_type == "postln":
-            self.forward = self._forward_postln
+        if self.ln_type == "preln" or self.ln_type == "predyt":
+            self.forward = self._forward_pre
+        elif self.ln_type == "postln" or self.ln_type == "postdyt":
+            self.forward = self._forward_post
         elif self.ln_type == "periln":
-            self.forward = self._forward_periln
+            self.forward = self._forward_peri
         elif self.ln_type == "mixln":
             if self.block_idx < self.mixln_split_layer:
-                self.forward = self._forward_postln
+                self.forward = self._forward_post
             else:
-                self.forward = self._forward_preln
+                self.forward = self._forward_pre
         else:
             raise ValueError(f"Unknown layernorm type: {self.ln_type}")
 
-    def _forward_preln(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_pre(self, x: torch.Tensor) -> torch.Tensor:
         """PreLN architecture (used in LLaMA and most modern transformers)"""
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
         
-    def _forward_postln(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_post(self, x: torch.Tensor) -> torch.Tensor:
         """PostLN architecture (used in original transformer paper)"""
         x = self.ln_1(x + self.attn(x))
         x = self.ln_2(x + self.mlp(x))
         return x
         
-    def _forward_periln(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_peri(self, x: torch.Tensor) -> torch.Tensor:
         """PeriLN architecture (both pre and post normalization)"""
         # Pre-norm first
         attn_output = self.attn(self.ln_1(x))
@@ -365,7 +395,6 @@ class LlamaStyleAttention(nn.Module):
         
         return y
     
-# Add to src/model/layers.py
 
 class LlamaStyleMLP(nn.Module):
     """MLP with SwiGLU activation (LLaMA style)"""
@@ -389,7 +418,6 @@ class LlamaStyleMLP(nn.Module):
     def forward(self, x):
         return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
     
-# Add to src/model/layers.py
 
 class LlamaStyleBlock(nn.Module):
     """
@@ -402,17 +430,30 @@ class LlamaStyleBlock(nn.Module):
         self.block_idx = block_idx
         self.n_layer = config.n_layer
         self.mixln_split_layer = int(config.n_layer * config.mixln_split)
+        self.norm_eps = getattr(config, "norm_eps", 1e-6)
+        
+        # Choose normalization type based on configuration
+        norm_class = DyT if self.ln_type in ["predyt", "postdyt"] else RMSNorm
+        init_alpha = getattr(config, "dyt_init_alpha", 1.0)
         
         # Create normalization layers based on architecture type
-        # PreLN and PeriLN need pre-normalization
-        if self.ln_type in ["preln", "periln"] or (self.ln_type == "mixln" and block_idx >= self.mixln_split_layer):
-            self.ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
-            self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        # PreLN, PeriLN, and PreDyT need pre-normalization
+        if self.ln_type in ["preln", "periln", "predyt"] or (self.ln_type == "mixln" and block_idx >= self.mixln_split_layer):
+            if self.ln_type == "predyt":
+                self.ln_1 = DyT(config.n_embd, init_alpha=init_alpha)
+                self.ln_2 = DyT(config.n_embd, init_alpha=init_alpha)
+            else:
+                self.ln_1 = RMSNorm(config.n_embd, eps=self.norm_eps)
+                self.ln_2 = RMSNorm(config.n_embd, eps=self.norm_eps)
         
-        # PostLN and PeriLN need post-normalization
-        if self.ln_type in ["postln", "periln"] or (self.ln_type == "mixln" and block_idx < self.mixln_split_layer):
-            self.post_ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
-            self.post_ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        # PostLN, PeriLN, and PostDyT need post-normalization
+        if self.ln_type in ["postln", "periln", "postdyt"] or (self.ln_type == "mixln" and block_idx < self.mixln_split_layer):
+            if self.ln_type == "postdyt":
+                self.post_ln_1 = DyT(config.n_embd, init_alpha=init_alpha)
+                self.post_ln_2 = DyT(config.n_embd, init_alpha=init_alpha)
+            else:
+                self.post_ln_1 = RMSNorm(config.n_embd, eps=self.norm_eps)
+                self.post_ln_2 = RMSNorm(config.n_embd, eps=self.norm_eps)
         
         # LLaMA-style components
         self.attn = LlamaStyleAttention(config)
@@ -420,30 +461,34 @@ class LlamaStyleBlock(nn.Module):
         
         # Set the forward method based on architecture type
         if self.ln_type == "preln":
-            self.forward = self._forward_preln
+            self.forward = self._forward_pre
         elif self.ln_type == "postln":
-            self.forward = self._forward_postln
+            self.forward = self._forward_post
         elif self.ln_type == "periln":
-            self.forward = self._forward_periln
+            self.forward = self._forward_peri
+        elif self.ln_type == "predyt":
+            self.forward = self._forward_pre  # Same pattern as preln
+        elif self.ln_type == "postdyt":
+            self.forward = self._forward_post  # Same pattern as postln
         elif self.ln_type == "mixln":
             if self.block_idx < self.mixln_split_layer:
-                self.forward = self._forward_postln
+                self.forward = self._forward_post
             else:
-                self.forward = self._forward_preln
+                self.forward = self._forward_pre
     
-    def _forward_preln(self, x):
+    def _forward_pre(self, x):
         """PreLN architecture (used in modern transformers)"""
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
     
-    def _forward_postln(self, x):
+    def _forward_post(self, x):
         """PostLN architecture (used in original transformer paper)"""
         x = self.post_ln_1(x + self.attn(x))
         x = self.post_ln_2(x + self.mlp(x))
         return x
     
-    def _forward_periln(self, x):
+    def _forward_peri(self, x):
         """PeriLN architecture (pre+post normalization)"""
         attn_output = self.attn(self.ln_1(x))
         x = self.post_ln_1(x + attn_output)

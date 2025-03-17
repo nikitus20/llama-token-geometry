@@ -11,11 +11,10 @@ import logging
 from typing import Tuple, Optional, Dict, Any
 
 from src.model.config import GPTConfig
-from src.model.layers import RMSNorm, LlamaStyleBlock
+from src.model.layers import RMSNorm, DyT, LlamaStyleBlock
 
 logger = logging.getLogger(__name__)
 
-# Update src/model/transformer.py
 
 class GPT(nn.Module):
     """
@@ -35,13 +34,22 @@ class GPT(nn.Module):
             h = nn.ModuleList([LlamaStyleBlock(config, i) for i in range(config.n_layer)]),
         ))
         
-        # Always use RMSNorm for final normalization layer
-        self.transformer.ln_f = RMSNorm(config.n_embd, eps=config.norm_eps)
+        # Final layer normalization
+        if config.ln in ["predyt", "postdyt"]:
+            init_alpha = getattr(config, "dyt_init_alpha", 1.0)
+            self.transformer.ln_f = DyT(config.n_embd, init_alpha=init_alpha)
+        else:
+            self.transformer.ln_f = RMSNorm(config.n_embd, eps=config.norm_eps)
         
-        # Add an initial normalization layer after embeddings for all architectures
+        # Add an initial normalization layer after embeddings if configured
         if config.use_initial_ln:
-            self.transformer.ln_emb = RMSNorm(config.n_embd, eps=config.norm_eps)
+            if config.ln in ["predyt", "postdyt"]:
+                init_alpha = getattr(config, "dyt_init_alpha", 1.0)
+                self.transformer.ln_emb = DyT(config.n_embd, init_alpha=init_alpha)
+            else:
+                self.transformer.ln_emb = RMSNorm(config.n_embd, eps=config.norm_eps)
             logger.info(f"Added initial normalization layer after embeddings for {config.ln} architecture")
+     
             
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # tie weights
