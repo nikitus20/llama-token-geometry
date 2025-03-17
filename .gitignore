@@ -18,6 +18,7 @@ build/
 *.egg
 
 # Output directories
+output/
 outputs/
 saved_models/
 
