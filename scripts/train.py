@@ -269,8 +269,6 @@ def parse_args():
                        help='Maximum sequence length')
     parser.add_argument('--dropout', type=float, default=0.0,
                        help='Dropout rate')
-    parser.add_argument('--no-swiglu', action='store_true',
-                       help='Disable SwiGLU activation (use GELU instead)')
     parser.add_argument('--no-initial-ln', action='store_true',
                        help='Disable initial layer normalization')
     
@@ -291,7 +289,7 @@ def parse_args():
                        help='Weight decay')
     parser.add_argument('--grad-clip', type=float, default=1.0,
                        help='Gradient clipping value')
-    parser.add_argument('--num-training-steps', type=int, default=10000,
+    parser.add_argument('--max-steps', type=int, default=10000,
                        help='Number of update steps to train for')
     
     # Data and evaluation arguments
@@ -302,7 +300,7 @@ def parse_args():
                        help='Tokenizer type to use')
     parser.add_argument('--workers', type=int, default=2,
                        help='Number of dataloader workers')
-    parser.add_argument('--eval-every', type=int, default=2000,
+    parser.add_argument('--eval-interval', type=int, default=2000,
                        help='Evaluate every N update steps')
     parser.add_argument('--eval-tokens', type=int, default=500000,
                        help='Number of tokens to use for evaluation')
@@ -310,7 +308,7 @@ def parse_args():
     # Saving and loading arguments
     parser.add_argument('--save-dir', type=str, required=True,
                        help='Directory to save model')
-    parser.add_argument('--save-every', type=int, default=5000,
+    parser.add_argument('--save-interval', type=int, default=5000,
                        help='Save every N update steps')
     parser.add_argument('--continue-from', type=str, default=None,
                        help='Continue training from a checkpoint')
@@ -450,7 +448,7 @@ def main():
         bias=False,  # LLaMA doesn't use bias
         ln=args.ln,
         use_initial_ln=not args.no_initial_ln,
-        use_swiglu=not args.no_swiglu,
+        use_swiglu=True,  # Always use SwiGLU as default
         max_position_embeddings=args.max_position_embeddings,
     )
     
@@ -510,7 +508,7 @@ def main():
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=args.warmup_steps,
-        num_training_steps=args.num_training_steps,
+        num_training_steps=args.max_steps,
         min_lr_ratio=args.min_lr_ratio,
     )
     
@@ -539,11 +537,11 @@ def main():
     tokens_seen = 0
     best_val_loss = float('inf')
     
-    progress_bar = tqdm(total=args.num_training_steps, disable=not is_main_process)
+    progress_bar = tqdm(total=args.max_steps, disable=not is_main_process)
     progress_bar.update(start_step)
     
     # Main training loop
-    while update_step < args.num_training_steps:
+    while update_step < args.max_steps:
         epoch_loss = 0.0
         epoch_start_time = time.time()
         
@@ -617,7 +615,7 @@ def main():
                     progress_bar.update(1)
                 
                 # Evaluate
-                if update_step % args.eval_every == 0:
+                if update_step % args.eval_interval == 0:
                     val_perplexity, eval_tokens = evaluate_model(
                         model, 
                         val_dataloader, 
@@ -652,7 +650,7 @@ def main():
                         logger.info(f"Saved best model with perplexity {val_perplexity:.2f}")
                 
                 # Save checkpoint
-                if is_main_process and update_step % args.save_every == 0:
+                if is_main_process and update_step % args.save_interval == 0:
                     checkpoint_path = save_dir / f"checkpoint-{update_step}"
                     checkpoint_path.mkdir(parents=True, exist_ok=True)
                     
@@ -678,7 +676,7 @@ def main():
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
                 
                 # Check if we've reached the maximum number of steps
-                if update_step >= args.num_training_steps:
+                if update_step >= args.max_steps:
                     break
             
             global_step += 1

@@ -279,10 +279,6 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-# LlamaRotaryEmbedding is identical to RotaryEmbedding, use that class instead
-# Keeping this reference for backward compatibility
-LlamaRotaryEmbedding = RotaryEmbedding
-
 # Add to src/model/layers.py
 
 class LlamaStyleAttention(nn.Module):
