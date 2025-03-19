@@ -51,3 +51,12 @@ class TiktokenTokenizer(BaseTokenizer):
         except Exception as e:
             logger.error(f"Error decoding tokens with Tiktoken: {e}")
             return ""
+            
+    @property
+    def pad_token_id(self) -> int:
+        """
+        Return the padding token ID.
+        For tiktoken, we'll use a value just past the end of the vocab as padding.
+        """
+        # Return a token just past the end of the vocabulary
+        return self.vocab_size

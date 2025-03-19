@@ -296,9 +296,11 @@ def parse_args():
     # Data and evaluation arguments
     parser.add_argument('--data-dir', type=str, default='data/wikitext-2',
                        help='Directory containing dataset')
-    parser.add_argument('--tokenizer-type', type=str, default='tiktoken',
-                       choices=['tiktoken', 'bpe', 'char'],
-                       help='Tokenizer type to use')
+    parser.add_argument('--tokenizer-type', type=str, default='huggingface',
+                   choices=['huggingface', 'tiktoken', 'bpe', 'char'],
+                   help='Tokenizer to use')
+    parser.add_argument('--tokenizer-model', type=str, default='TinyLlama/TinyLlama-1.1B-Chat-v1.0',
+                   help='Model name for HuggingFace tokenizer (use open models like TinyLlama/TinyLlama-1.1B-Chat-v1.0, mistralai/Mistral-7B-v0.1, or openlm-research/open_llama_3b)')
     parser.add_argument('--workers', type=int, default=2,
                        help='Number of dataloader workers')
     parser.add_argument('--eval-interval', type=int, default=2000,
@@ -396,8 +398,8 @@ def main():
     device = get_device(args)
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer_type)
-    pad_idx = tokenizer.vocab_size - 1  # Assuming last token is padding
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer_type, model_name=args.tokenizer_model)
+    pad_idx = tokenizer.pad_token_id  # Use the tokenizer's pad_token_id property instead of assuming last token
     
     # Create datasets
     logger.info(f"Loading datasets from {args.data_dir}")
@@ -454,7 +456,7 @@ def main():
     
     # Create model
     logger.info("Creating model")
-    vocab_size = args.vocab_size if args.vocab_size else getattr(tokenizer, 'vocab_size', 50257)
+    vocab_size = args.vocab_size if args.vocab_size else getattr(tokenizer, 'vocab_size', 32000)
     config = GPTConfig(
         vocab_size=vocab_size,
         block_size=args.block_size,
@@ -467,9 +469,28 @@ def main():
         use_initial_ln=not args.no_initial_ln,
         use_swiglu=True,  # Always use SwiGLU as default
         max_position_embeddings=args.max_position_embeddings,
+        pad_token_id=pad_idx,  # Pass the padding token ID to the model config
     )
     
     model = GPT(config)
+    
+    # If we're using a HuggingFace tokenizer with a modified vocabulary
+    # (like when adding a pad token to Llama), resize the model's embedding matrix
+    if args.tokenizer_type == "huggingface":
+        if getattr(tokenizer, "tokenizer", None) is not None and hasattr(tokenizer.tokenizer, "added_tokens_encoder"):
+            # Handle case when using HuggingFaceTokenizer wrapper
+            if len(tokenizer.tokenizer.added_tokens_encoder) > 0:
+                logger.info(f"Resizing model embeddings to match tokenizer vocabulary size: {tokenizer.vocab_size}")
+                
+                # Need to resize both the embedding and lm_head
+                current_vocab_size = model.transformer.wte.weight.size(0)
+                if tokenizer.vocab_size != current_vocab_size:
+                    model.transformer.wte = nn.Embedding(tokenizer.vocab_size, config.n_embd)
+                    model.lm_head = nn.Linear(config.n_embd, tokenizer.vocab_size, bias=False)
+                    # Re-tie weights
+                    model.transformer.wte.weight = model.lm_head.weight
+                    model.config.vocab_size = tokenizer.vocab_size
+                    logger.info(f"Model vocabulary resized from {current_vocab_size} to {tokenizer.vocab_size}")
     
     if args.gradient_checkpointing:
         if hasattr(model, "gradient_checkpointing_enable"):

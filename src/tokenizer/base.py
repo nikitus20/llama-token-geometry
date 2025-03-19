@@ -14,3 +14,8 @@ class BaseTokenizer:
     def decode(self, tokens: List[int]) -> str:
         """Convert token IDs to text."""
         raise NotImplementedError
+    
+    @property
+    def pad_token_id(self) -> int:
+        """Return the padding token ID. By default, uses the last token in vocabulary."""
+        return self.vocab_size - 1

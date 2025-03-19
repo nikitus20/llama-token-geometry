@@ -93,7 +93,8 @@ def plot_token_geometry(metrics: Dict[str, Dict[str, Dict[int, float]]],
     metric_labels = {
         'cosine_sim': 'Average Cosine Similarity',
         'token_norm': 'Token Representation Norm',
-        'update_norm': 'Update Norm (Change Between Layers)'
+        'update_norm': 'Update Norm (Change Between Layers)',
+        'gradient_norm': 'Gradient Norm Across Layers'
     }
     
     # Plot each metric
@@ -212,7 +213,8 @@ def plot_architecture_comparison(results: Dict[str, Union[Dict[int, float], Dict
     metric_labels = {
         'cosine_sim': 'Average Cosine Similarity',
         'token_norm': 'Token Representation Norm',
-        'update_norm': 'Update Norm (Change Between Layers)'
+        'update_norm': 'Update Norm (Change Between Layers)',
+        'gradient_norm': 'Gradient Norm Across Layers'
     }
     metric_label = metric_labels.get(metric_name, metric_name)
     

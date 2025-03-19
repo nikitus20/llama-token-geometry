@@ -3,15 +3,14 @@ Configuration classes for transformer models.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Literal, Union, Optional
 
-# Update src/model/config.py
 
 @dataclass
 class GPTConfig:
     """Configuration for the GPT model with LLaMA-style architecture options."""
     block_size: int = 1024
-    vocab_size: int = 50304  # GPT-2 vocabulary size (50257 rounded up)
+    vocab_size: int = 32000  # LLAMA vocabulary size
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -31,6 +30,9 @@ class GPTConfig:
     # Added LLaMA-specific parameters
     max_position_embeddings: int = 2048  # Maximum sequence length for rotary embeddings
     rope_base: int = 10000  # Base for rotary embeddings
+    
+    # Tokenizer-related parameters
+    pad_token_id: Optional[int] = None  # ID of the padding token for the embedding layer
     
     @property
     def pre_ln(self) -> bool:

@@ -10,6 +10,7 @@ from src.tokenizer.base import BaseTokenizer
 from src.tokenizer.character import CharTokenizer
 from src.tokenizer.bpe import BPETokenizer
 from src.tokenizer.tiktoken_tokenizer import TiktokenTokenizer
+from src.tokenizer.huggingface_tokenizer import HuggingFaceTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +52,37 @@ def _get_sample_prompts() -> List[str]:
     ]
 
 
-def get_tokenizer(tokenizer_type: str = "tiktoken") -> BaseTokenizer:
+def get_tokenizer(tokenizer_type: str = "huggingface", model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0") -> BaseTokenizer:
     """
     Get a tokenizer based on the specified type.
     
     Args:
-        tokenizer_type: Type of tokenizer to use ("tiktoken", "bpe", or "char")
+        tokenizer_type: Type of tokenizer to use ("huggingface", "tiktoken", "bpe", or "char")
+        model_name: Model name or path for HuggingFace AutoTokenizer
+            
+            Recommended open-source Llama-compatible models:
+            - "TinyLlama/TinyLlama-1.1B-Chat-v1.0" (default)
+            - "openlm-research/open_llama_3b"
+            - "openlm-research/open_llama_7b" 
+            - "mistralai/Mistral-7B-v0.1"
+            
+            Note: Meta's "meta-llama/Llama-2-7b-hf" is gated and requires 
+            authentication. The models above are open alternatives.
         
     Returns:
         A tokenizer instance
     """
-    # Try tiktoken first (best option)
+    # Try HuggingFace tokenizer first (new default)
+    if tokenizer_type.lower() == "huggingface":
+        try:
+            logger.info(f"Using HuggingFace AutoTokenizer with model {model_name}")
+            return HuggingFaceTokenizer(model_name)
+        except Exception as e:
+            logger.error(f"Error loading HuggingFace tokenizer: {e}")
+            logger.info("Falling back to Tiktoken tokenizer")
+            tokenizer_type = "tiktoken"
+    
+    # Try tiktoken next
     if tokenizer_type.lower() == "tiktoken":
         try:
             logger.info("Using Tiktoken tokenizer (GPT-2 encoding)")

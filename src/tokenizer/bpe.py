@@ -68,3 +68,12 @@ class BPETokenizer(BaseTokenizer):
             if token_id in self.decoder:
                 text_tokens.append(self.decoder[token_id])
         return ''.join(text_tokens)
+        
+    @property
+    def pad_token_id(self) -> int:
+        """
+        Return the padding token ID.
+        For BPE, use a token ID that's not in the vocabulary.
+        """
+        # Use a token just past the end of the vocabulary
+        return self.vocab_size

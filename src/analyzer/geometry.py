@@ -22,16 +22,18 @@ class GeometryAnalyzer:
     - Cosine similarity between tokens
     - Token representation norms
     - Update norms between consecutive layers
+    - Gradient norms across layers (how gradients propagate backwards)
     - Variance of metrics across different prompts
     """
     
-    def __init__(self, model: GPT, device: str = None):
+    def __init__(self, model: GPT, device: str = None, track_gradients: bool = True):
         """
         Initialize geometry analyzer for a GPT model.
         
         Args:
             model: GPT model
             device: device to run on (cuda, mps, or cpu)
+            track_gradients: whether to track gradient norms during analysis (default: True)
         """
         from src.model.utils import get_device
         if device is None:
@@ -39,11 +41,15 @@ class GeometryAnalyzer:
         self.device = device
         self.model = model
         self.model.to(device)
-        self.model.eval()
+        self.track_gradients = track_gradients
+        
+        # Store original training state to restore later
+        self.was_training = self.model.training
         
         # Register hooks to capture intermediate token representations
         self.hooks = []
         self.layer_outputs = {}
+        self.gradient_norms = {}
         
         # Register hooks for each transformer block
         # Using a function to properly capture layer_idx in closure
@@ -62,12 +68,29 @@ class GeometryAnalyzer:
             )
         )
         
+        # Register gradient hooks if requested
+        if self.track_gradients:
+            self.grad_hooks = []
+            
+            def get_grad_hook_fn(layer_idx):
+                def grad_hook_fn(module, grad_input, grad_output):
+                    # Store the gradient norm of the output
+                    if isinstance(grad_output, tuple):
+                        grad_output = grad_output[0]
+                    if grad_output is not None:
+                        self.gradient_norms[layer_idx] = grad_output.detach().norm().item()
+                return grad_hook_fn
+            
+            for i, block in enumerate(model.transformer.h):
+                self.grad_hooks.append(block.register_full_backward_hook(get_grad_hook_fn(i)))
+        
     def compute_token_metrics(self, input_ids: torch.Tensor) -> Dict[str, Dict[int, float]]:
         """
         Compute various token metrics at each layer:
         - Average cosine similarity between tokens
         - Average token norm
         - Average update norm (difference between consecutive layers)
+        - Average gradient norm (if track_gradients is True)
         
         Args:
             input_ids: Input token IDs [batch_size, seq_len]
@@ -78,14 +101,44 @@ class GeometryAnalyzer:
         batch_size, seq_len = input_ids.size()
         self.layer_outputs = {}
         
-        # Forward pass to collect layer outputs
-        with torch.no_grad():
-            self.model(input_ids)
+        # Set model to eval mode for forward pass
+        original_mode = self.model.training
+        self.model.eval()
+        
+        # If tracking gradients, we need to ensure we have gradients enabled
+        if self.track_gradients:
+            self.gradient_norms = {}
             
+            # Enable gradients for the forward pass
+            with torch.set_grad_enabled(True):
+                # Forward pass to collect layer outputs
+                logits, _ = self.model(input_ids)
+                
+                # We need a loss to backpropagate
+                # Simple loss: predict the next token
+                if input_ids.size(1) > 1:  # Check if sequence length is at least 2 tokens
+                    shifted_logits = logits[:, :-1, :].contiguous()
+                    shifted_targets = input_ids[:, 1:].contiguous()
+                    loss = F.cross_entropy(shifted_logits.view(-1, shifted_logits.size(-1)), 
+                                        shifted_targets.view(-1))
+                else:
+                    # For very short sequences, just use a dummy loss on the full logits
+                    # to ensure we can get gradients flowing
+                    dummy_targets = torch.zeros(input_ids.size(0), dtype=torch.long, device=self.device)
+                    loss = F.cross_entropy(logits[:, 0, :], dummy_targets)
+                
+                # Backward pass to collect gradients
+                loss.backward()
+        else:
+            # Standard forward pass without gradients
+            with torch.no_grad():
+                self.model(input_ids)
+                
         # Initialize metric dictionaries
         avg_cosine_sims = {}
         avg_token_norms = {}
         avg_update_norms = {}
+        avg_gradient_norms = {}
         
         # Sort layer indices to ensure proper calculation of updates
         layer_indices = sorted(self.layer_outputs.keys())
@@ -144,12 +197,27 @@ class GeometryAnalyzer:
             if i > 0:
                 avg_update_norms[layer_idx] = np.mean(batch_updates)
         
+        # Add gradient norms if tracking gradients
+        if self.track_gradients:
+            avg_gradient_norms = self.gradient_norms
+        
+        # Reset model to original training mode
+        self.model.train(original_mode)
+        
+        # Zero gradients to prevent interference with any ongoing training
+        if self.track_gradients:
+            self.model.zero_grad()
+        
         # Package all metrics in a dictionary
         metrics = {
             'cosine_sim': avg_cosine_sims,
             'token_norm': avg_token_norms,
             'update_norm': avg_update_norms
         }
+        
+        # Add gradient norms if available
+        if self.track_gradients:
+            metrics['gradient_norm'] = avg_gradient_norms
         
         return metrics
     
@@ -182,6 +250,10 @@ class GeometryAnalyzer:
             'token_norm': {},
             'update_norm': {}
         }
+        
+        # Add gradient_norm to metrics if tracking gradients
+        if self.track_gradients:
+            all_metrics['gradient_norm'] = {}
         
         # Process prompts in batches
         batch_size = 4  # Small batch size to avoid memory issues
@@ -255,17 +327,14 @@ class GeometryAnalyzer:
             logger.error(f"Error tokenizing prompt: {e}")
             return {'tokens': [], 'metrics': {}, 'similarity_matrices': {}}
         
-        # Forward pass
-        self.layer_outputs = {}
-        try:
-            with torch.no_grad():
-                self.model(input_ids)
-        except Exception as e:
-            logger.error(f"Error during forward pass: {e}", exc_info=True)
-            return {'tokens': tokens, 'metrics': {}, 'similarity_matrices': {}}
+        # Clear any existing gradients if tracking gradients
+        if self.track_gradients:
+            self.model.zero_grad()
         
-        # Calculate metrics and similarity matrices for each layer
+        # Compute metrics (including gradient norms if tracking)
         metrics = self.compute_token_metrics(input_ids)
+        
+        # Calculate similarity matrices
         sim_matrices = {}
         
         # Sort layer indices for consistent processing
@@ -299,6 +368,15 @@ class GeometryAnalyzer:
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
+        
+        if self.track_gradients and hasattr(self, 'grad_hooks'):
+            for hook in self.grad_hooks:
+                hook.remove()
+            self.grad_hooks = []
+            
+        # Restore original training state
+        if hasattr(self, 'was_training'):
+            self.model.train(self.was_training)
 
     def visualize_metrics(self, metrics_dict, title="Token Geometry Analysis", figsize=(14, 10)):
         """
@@ -308,57 +386,109 @@ class GeometryAnalyzer:
             metrics_dict: Dictionary with structure from analyze_prompts
             title: Plot title
             figsize: Figure size
+            
+        Returns:
+            Matplotlib figure or None if visualization failed
         """
         try:
             import matplotlib.pyplot as plt
             
-            # Create figure with multiple subplots
-            fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
-            fig.suptitle(title, fontsize=16)
-            
             # Get the mean metrics and variances
-            mean_metrics = metrics_dict['mean']
-            var_metrics = metrics_dict['variance']
+            mean_metrics = metrics_dict.get('mean', {})
+            var_metrics = metrics_dict.get('variance', {})
             
-            metric_names = ['cosine_sim', 'token_norm', 'update_norm']
-            metric_titles = ['Average Cosine Similarity', 'Average Token Norm', 'Average Update Norm']
+            # If old format (no mean/variance structure), use as is
+            if 'mean' not in metrics_dict and len(metrics_dict) > 0:
+                mean_metrics = metrics_dict
+                var_metrics = {}
+            
+            # Define metrics to display
+            available_metrics = list(mean_metrics.keys())
+            metric_labels = {
+                'cosine_sim': 'Average Cosine Similarity',
+                'token_norm': 'Token Representation Norm',
+                'update_norm': 'Update Norm (Change Between Layers)',
+                'gradient_norm': 'Gradient Norm Across Layers'
+            }
+            
+            # Filter to only include metrics that exist in the data
+            metric_names = [m for m in ['cosine_sim', 'token_norm', 'update_norm', 'gradient_norm'] 
+                          if m in available_metrics]
+            
+            if not metric_names:
+                logger.warning("No metrics found to visualize")
+                return None
+                
+            metric_titles = [metric_labels.get(name, name) for name in metric_names]
+            
+            # Create figure with dynamic number of subplots based on metrics
+            num_plots = len(metric_names)
+            fig, axes = plt.subplots(num_plots, 1, figsize=(figsize[0], figsize[1] * num_plots/3), sharex=True)
+            
+            # Ensure axes is always a list for consistent indexing
+            if num_plots == 1:
+                axes = [axes]
+                
+            fig.suptitle(title, fontsize=16)
             
             for i, (metric_name, metric_title) in enumerate(zip(metric_names, metric_titles)):
                 ax = axes[i]
                 
-                # Get the mean values by layer
-                layers = sorted(mean_metrics[metric_name].keys())
-                mean_values = [mean_metrics[metric_name][layer] for layer in layers]
+                # Get the metric values by layer
+                metric_data = mean_metrics[metric_name]
+                if not metric_data:
+                    # Skip empty metrics
+                    ax.text(0.5, 0.5, f"No data for {metric_title}", 
+                           horizontalalignment='center', verticalalignment='center',
+                           transform=ax.transAxes)
+                    continue
+                    
+                # Get layers and values
+                layers = sorted(metric_data.keys())
+                values = [metric_data[layer] for layer in layers]
                 
-                # Get corresponding variances
-                var_values = [var_metrics[metric_name].get(layer, 0) for layer in layers]
-                std_values = np.sqrt(var_values)
+                # Get variance if available
+                if var_metrics and metric_name in var_metrics:
+                    var_data = var_metrics[metric_name]
+                    std_values = [np.sqrt(var_data.get(layer, 0)) for layer in layers]
+                    
+                    # Plot with error bars (standard deviation)
+                    ax.errorbar(layers, values, yerr=std_values, marker='o', linestyle='-', 
+                               capsize=4, label=metric_title)
+                else:
+                    # Plot without error bars
+                    ax.plot(layers, values, marker='o', linestyle='-', linewidth=2, label=metric_title)
                 
-                # Plot mean with error bars (standard deviation)
-                ax.errorbar(layers, mean_values, yerr=std_values, marker='o', linestyle='-', 
-                           capsize=4, label=f'{metric_title} across layers')
-                
+                # Set labels and grid
                 ax.set_ylabel(metric_title)
                 ax.grid(True, linestyle='--', alpha=0.7)
+                ax.legend()
                 
                 # Add a horizontal line at 0 for context if values might be negative
-                ax.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+                if min(values) < 0:
+                    ax.axhline(y=0, color='r', linestyle='-', alpha=0.3)
                 
                 # Set y limits with some padding
-                min_val = np.min(np.array(mean_values) - np.array(std_values))
-                max_val = np.max(np.array(mean_values) + np.array(std_values))
-                padding = (max_val - min_val) * 0.1
+                if 'std_values' in locals() and std_values:
+                    min_val = np.min(np.array(values) - np.array(std_values))
+                    max_val = np.max(np.array(values) + np.array(std_values))
+                else:
+                    min_val = np.min(values)
+                    max_val = np.max(values)
+                    
+                padding = max(0.1, (max_val - min_val) * 0.1)
                 ax.set_ylim(min_val - padding, max_val + padding)
             
             # Configure the x-axis (shared across subplots)
-            axes[-1].set_xlabel('Layer Index')
-            axes[-1].set_xticks(layers)
+            if 'layers' in locals() and len(layers) > 0:
+                axes[-1].set_xlabel('Layer Index')
+                axes[-1].set_xticks(layers)
             
             # Adjust layout and save/show
             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
             
             return fig
             
-        except ImportError:
-            logger.warning("Matplotlib not available for visualization.")
+        except Exception as e:
+            logger.warning(f"Error in visualization: {e}")
             return None
