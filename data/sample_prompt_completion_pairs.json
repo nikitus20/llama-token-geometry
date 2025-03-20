@@ -1,0 +1,22 @@
+[
+  {
+    "prompt": "What is machine learning?",
+    "completion": "Machine learning is a branch of artificial intelligence that focuses on building systems that learn from data."
+  },
+  {
+    "prompt": "Explain neural networks.",
+    "completion": "Neural networks are computing systems inspired by biological brains. They process information through interconnected nodes organized in layers."
+  },
+  {
+    "prompt": "Define gradient descent.",
+    "completion": "Gradient descent is an optimization algorithm used to minimize a function by iteratively moving in the direction of steepest descent."
+  },
+  {
+    "prompt": "What is backpropagation?",
+    "completion": "Backpropagation is an algorithm for training neural networks by calculating gradients of the loss function with respect to the weights."
+  },
+  {
+    "prompt": "Explain transformers.",
+    "completion": "Transformers are neural network architectures that use self-attention mechanisms to process sequential data in parallel."
+  }
+] 

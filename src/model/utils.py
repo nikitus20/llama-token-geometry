@@ -47,7 +47,7 @@ def create_random_model(
         n_layer: Number of transformer layers
         n_head: Number of attention heads
         n_embd: Embedding dimension
-        ln_type: Layer normalization architecture (preln, postln, periln, mixln)
+        ln_type: Layer normalization architecture (preln, postln, periln, mixln, predyt, postdyt, deepnorm)
         use_initial_ln: Whether to apply normalization after embeddings
         mixln_split: Fraction of layers to use postln in mixln architecture
         use_swiglu: Whether to use SwiGLU activation
@@ -83,6 +83,12 @@ def create_random_model(
                f"{ln_type.capitalize()} architecture, " +
                f"{'with' if use_initial_ln else 'without'} initial normalization, " +
                f"RoPE (max_len={max_position_embeddings}, base={rope_base})")
+    
+    if ln_type == "deepnorm":
+        config.deepnorm_alpha = (2 * n_layer) ** 0.25  # For decoder-only
+        config.deepnorm_beta = (8 * n_layer) ** -0.25  # For decoder-only
+        logger.info(f"Using DeepNorm with alpha={config.deepnorm_alpha:.4f}, beta={config.deepnorm_beta:.4f}") 
+    
     model = GPT(config)
     
     # Move to specified device if provided

@@ -431,6 +431,16 @@ class LlamaStyleBlock(nn.Module):
         self.n_layer = config.n_layer
         self.mixln_split_layer = int(config.n_layer * config.mixln_split)
         self.norm_eps = getattr(config, "norm_eps", 1e-6)
+        # Compute DeepNorm parameters if not explicitly provided
+        if self.ln_type == "deepnorm":
+            # For decoder-only models like GPT
+            self.alpha = config.deepnorm_alpha if config.deepnorm_alpha is not None else (2 * self.n_layer) ** 0.25
+            self.beta = config.deepnorm_beta if config.deepnorm_beta is not None else (8 * self.n_layer) ** -0.25
+            
+            # Only need one LayerNorm for DeepNorm
+            self.layer_norm = RMSNorm(config.n_embd, eps=self.norm_eps)
+
+        
         
         # Choose normalization type based on configuration
         norm_class = DyT if self.ln_type in ["predyt", "postdyt"] else RMSNorm
@@ -459,8 +469,14 @@ class LlamaStyleBlock(nn.Module):
         self.attn = LlamaStyleAttention(config)
         self.mlp = LlamaStyleMLP(config)
         
+        #  For DeepNorm initialization
+        if self.ln_type == "deepnorm":
+            self._apply_deepnorm_init()
+
         # Set the forward method based on architecture type
-        if self.ln_type == "preln":
+        if self.ln_type == "deepnorm":
+            self.forward = self._forward_deepnorm
+        elif self.ln_type == "preln":
             self.forward = self._forward_pre
         elif self.ln_type == "postln":
             self.forward = self._forward_post
@@ -476,6 +492,19 @@ class LlamaStyleBlock(nn.Module):
             else:
                 self.forward = self._forward_pre
     
+
+    def _apply_deepnorm_init(self):
+        """Apply special initialization for DeepNorm"""
+        # Initialize FFN, v_proj, out_proj with gain=beta
+        for name, module in self.named_modules():
+            if any(x in name for x in ['ffn', 'v_proj', 'out_proj', 'down_proj', 'gate_proj', 'up_proj']):
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_normal_(module.weight, gain=self.beta)
+            # Initialize q_proj, k_proj with gain=1
+            elif any(x in name for x in ['q_proj', 'k_proj']):
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_normal_(module.weight, gain=1.0)
+
     def _forward_pre(self, x):
         """PreLN architecture (used in modern transformers)"""
         x = x + self.attn(self.ln_1(x))
@@ -494,4 +523,18 @@ class LlamaStyleBlock(nn.Module):
         x = self.post_ln_1(x + attn_output)
         mlp_output = self.mlp(self.ln_2(x))
         x = self.post_ln_2(x + mlp_output)
+        return x
+    
+    def _forward_deepnorm(self, x):
+        """DeepNorm architecture (scaling residual connections)"""
+        # Attention block with DeepNorm
+        residual = x
+        attn_output = self.attn(x)
+        x = self.layer_norm(residual * self.alpha + attn_output)
+        
+        # FFN block with DeepNorm
+        residual = x
+        ffn_output = self.mlp(x)
+        x = self.layer_norm(residual * self.alpha + ffn_output)
+        
         return x

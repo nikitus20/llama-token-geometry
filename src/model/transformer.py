@@ -125,7 +125,11 @@ class GPT(nn.Module):
         
         # Apply initial normalization layer after embeddings if configured
         if self.config.use_initial_ln and hasattr(self.transformer, 'ln_emb'):
-            x = self.transformer.ln_emb(x)
+            # Only apply initial layernorm for postln, deepnorm and mixln
+            if self.config.ln in ["postln", "deepnorm", "mixln"]:
+                x = self.transformer.ln_emb(x)
+                # Scale down by sqrt(n_embd)
+                x = x / math.sqrt(self.config.n_embd)
         
         for block in self.transformer.h:
             x = block(x)

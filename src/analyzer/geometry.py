@@ -83,6 +83,89 @@ class GeometryAnalyzer:
             
             for i, block in enumerate(model.transformer.h):
                 self.grad_hooks.append(block.register_full_backward_hook(get_grad_hook_fn(i)))
+    
+    def enhance_gradient_tracking(self):
+        """
+        Enhanced gradient tracking that captures more detailed gradient statistics.
+        Call this after initializing the GeometryAnalyzer but before analysis.
+        """
+        if not hasattr(self, 'gradient_cosine_sims'):
+            self.track_gradients = True
+            self.gradient_norms = {}
+            self.gradient_cosine_sims = {}  # Track cosine similarity between gradients
+            self.gradient_update_corr = {}  # Track correlation between gradients and updates
+            
+            # Register gradient hooks
+            # If hooks already exist, remove them first
+            if hasattr(self, 'grad_hooks') and self.grad_hooks:
+                for hook in self.grad_hooks:
+                    hook.remove()
+            
+            self.grad_hooks = []
+            
+            def get_grad_hook_fn(layer_idx):
+                def grad_hook_fn(module, grad_input, grad_output):
+                    if isinstance(grad_output, tuple):
+                        grad_output = grad_output[0]
+                    if grad_output is not None:
+                        # Store gradient norm
+                        self.gradient_norms[layer_idx] = grad_output.detach().norm().item()
+                        
+                        # Store the raw gradients for further analysis
+                        if not hasattr(self, 'raw_gradients'):
+                            self.raw_gradients = {}
+                        self.raw_gradients[layer_idx] = grad_output.detach().clone()
+                        
+                        # If we have the previous layer's output stored, compute correlation
+                        # between gradients and the updates (changes from previous layer)
+                        if hasattr(self, 'layer_outputs'):
+                            layer_indices = sorted(self.layer_outputs.keys())
+                            # Find the current layer's index in our tracked outputs
+                            if layer_idx in layer_indices:
+                                current_idx = layer_indices.index(layer_idx)
+                                # Make sure we have a previous layer to compare with
+                                if current_idx > 0:
+                                    prev_layer_idx = layer_indices[current_idx-1]
+                                    
+                                    # Safety check to ensure both layers exist in outputs
+                                    if layer_idx in self.layer_outputs and prev_layer_idx in self.layer_outputs:
+                                        curr_output = self.layer_outputs[layer_idx]
+                                        prev_output = self.layer_outputs[prev_layer_idx]
+                                        
+                                        # Compute update vector (difference between consecutive layers)
+                                        update = curr_output - prev_output
+                                        
+                                        # Reshape to match for correlation calculation
+                                        grad_flat = grad_output.view(-1)
+                                        update_flat = update.view(-1)
+                                        
+                                        # Compute cosine similarity between gradient and update
+                                        norm_grad = torch.norm(grad_flat)
+                                        norm_update = torch.norm(update_flat)
+                                        
+                                        if norm_grad > 0 and norm_update > 0:
+                                            cosine_sim = torch.dot(grad_flat, update_flat) / (norm_grad * norm_update)
+                                            self.gradient_update_corr[layer_idx] = cosine_sim.item()
+                return grad_hook_fn
+            
+            # Register hooks for each transformer block
+            for i, block in enumerate(self.model.transformer.h):
+                self.grad_hooks.append(block.register_full_backward_hook(get_grad_hook_fn(i)))
+            
+            # Also register hook for the final layer norm
+            self.grad_hooks.append(
+                self.model.transformer.ln_f.register_full_backward_hook(
+                    get_grad_hook_fn(len(self.model.transformer.h))
+                )
+            )
+            
+            # Optional: Register hook for embedding layer to track gradients all the way to embeddings
+            # Note: embeddings need special handling because they're not part of the forward pass hooks
+            self.grad_hooks.append(
+                self.model.transformer.wte.register_full_backward_hook(
+                    get_grad_hook_fn(-1)  # Use same special index for embedding layer
+                )
+            )
         
     def compute_token_metrics(self, input_ids: torch.Tensor) -> Dict[str, Dict[int, float]]:
         """
@@ -104,6 +187,13 @@ class GeometryAnalyzer:
         # Set model to eval mode for forward pass
         original_mode = self.model.training
         self.model.eval()
+        
+        # Store the original input embeddings for first layer update calculation
+        with torch.no_grad():
+            # Get input embeddings directly from the embedding layer
+            input_embeds = self.model.transformer.wte(input_ids)  # [batch_size, seq_len, hidden_dim]
+            # Store these as a special key for embeddings
+            self.layer_outputs[-1] = input_embeds
         
         # If tracking gradients, we need to ensure we have gradients enabled
         if self.track_gradients:
@@ -144,6 +234,10 @@ class GeometryAnalyzer:
         layer_indices = sorted(self.layer_outputs.keys())
         
         for i, layer_idx in enumerate(layer_indices):
+            # Skip the embedding layer for cosine sim and token norm calculations
+            if layer_idx < 0:
+                continue
+                
             layer_output = self.layer_outputs[layer_idx]
             # Layer output shape: [batch_size, seq_len, hidden_dim]
             
@@ -172,12 +266,14 @@ class GeometryAnalyzer:
                 mask = torch.ones_like(sim_matrix) - torch.eye(seq_len, device=self.device)
                 masked_sim = sim_matrix * mask
                 
-                # Compute average similarity (excluding self-similarity)
-                avg_sim = masked_sim.masked_select(mask.bool()).mean().item()
-                batch_sims.append(avg_sim)
+                # Only compute mean if we have more than one token (otherwise it's meaningless)
+                if seq_len > 1:
+                    # Compute average similarity (excluding self-similarity)
+                    avg_sim = masked_sim.masked_select(mask.bool()).mean().item()
+                    batch_sims.append(avg_sim)
                 
-                # 3. Compute update norms (if not the first layer)
-                if i > 0:
+                # 3. Compute update norms (for ALL layers, including first transformer layer)
+                if i > 0:  # We can always compute this since we stored the embedding outputs at key -1
                     prev_layer_idx = layer_indices[i-1]
                     prev_tokens = self.layer_outputs[prev_layer_idx][b]
                     
@@ -190,12 +286,12 @@ class GeometryAnalyzer:
                     batch_updates.append(avg_update)
             
             # Average across batches
-            avg_cosine_sims[layer_idx] = np.mean(batch_sims)
-            avg_token_norms[layer_idx] = np.mean(batch_norms)
+            avg_cosine_sims[layer_idx] = np.mean(batch_sims) if batch_sims else 0.0
+            avg_token_norms[layer_idx] = np.mean(batch_norms) if batch_norms else 0.0
             
             # Only store update norms for layers after the first one
             if i > 0:
-                avg_update_norms[layer_idx] = np.mean(batch_updates)
+                avg_update_norms[layer_idx] = np.mean(batch_updates) if batch_updates else 0.0
         
         # Add gradient norms if tracking gradients
         if self.track_gradients:
@@ -235,12 +331,16 @@ class GeometryAnalyzer:
                 'mean': {
                     'cosine_sim': {layer_idx: mean_value, ...},
                     'token_norm': {layer_idx: mean_value, ...},
-                    'update_norm': {layer_idx: mean_value, ...}
+                    'update_norm': {layer_idx: mean_value, ...},
+                    'gradient_norm': {layer_idx: mean_value, ...},
+                    'gradient_update_correlation': {layer_idx: mean_value, ...}
                 },
                 'variance': {
                     'cosine_sim': {layer_idx: variance_value, ...},
                     'token_norm': {layer_idx: variance_value, ...},
-                    'update_norm': {layer_idx: variance_value, ...}
+                    'update_norm': {layer_idx: variance_value, ...},
+                    'gradient_norm': {layer_idx: variance_value, ...},
+                    'gradient_update_correlation': {layer_idx: variance_value, ...}
                 }
             }
         """
@@ -248,65 +348,54 @@ class GeometryAnalyzer:
         all_metrics = {
             'cosine_sim': {},
             'token_norm': {},
-            'update_norm': {}
+            'update_norm': {},
+            'gradient_norm': {},
+            'gradient_update_correlation': {}
         }
         
-        # Add gradient_norm to metrics if tracking gradients
-        if self.track_gradients:
-            all_metrics['gradient_norm'] = {}
+        # Make sure gradient tracking is enhanced
+        self.enhance_gradient_tracking()
         
-        # Process prompts in batches
-        batch_size = 4  # Small batch size to avoid memory issues
-        for i in tqdm(range(0, len(prompts), batch_size), desc="Analyzing prompts"):
-            batch_prompts = prompts[i:i+batch_size]
+        # Analyze each prompt
+        for prompt in tqdm(prompts, desc="Analyzing prompts"):
+            # Tokenize prompt
+            encoded = tokenizer.encode(prompt, return_tensors="pt").to(self.device)
             
-            # Tokenize prompts
-            try:
-                # Tokenize and pad batch
-                batch_tokens = [tokenizer.encode(p) for p in batch_prompts]
-                max_len = min(self.model.config.block_size, max(len(t) for t in batch_tokens))
-                
-                # Pad tokens to max length
-                padded_tokens = [
-                    t[:max_len] + [0] * (max_len - len(t)) if len(t) > 0 else [0] * max_len
-                    for t in batch_tokens
-                ]
-                
-                batch_input_ids = torch.tensor(padded_tokens, dtype=torch.long, device=self.device)
-            except Exception as e:
-                logger.error(f"Error tokenizing batch: {e}")
-                continue
+            # Run basic token metrics
+            metrics = self.compute_token_metrics(encoded)
             
-            # Compute metrics
-            try:
-                batch_metrics = self.compute_token_metrics(batch_input_ids)
-                
-                # Accumulate results for each metric type
-                for metric_name, layer_values in batch_metrics.items():
-                    for layer_idx, value in layer_values.items():
-                        if layer_idx not in all_metrics[metric_name]:
-                            all_metrics[metric_name][layer_idx] = []
-                        all_metrics[metric_name][layer_idx].append(value)
-            except Exception as e:
-                logger.error(f"Error computing metrics: {e}")
-                continue
+            # Run enhanced gradient analysis
+            grad_metrics = self.analyze_gradients(encoded)
+            
+            # Merge metrics
+            metrics.update(grad_metrics)
+            
+            # Collect metrics for each prompt
+            for metric_name, layer_values in metrics.items():
+                if metric_name not in all_metrics:
+                    all_metrics[metric_name] = {}
+                    
+                for layer_idx, value in layer_values.items():
+                    if layer_idx not in all_metrics[metric_name]:
+                        all_metrics[metric_name][layer_idx] = []
+                    all_metrics[metric_name][layer_idx].append(value)
         
-        # Compute mean and variance across all prompts
-        result = {
+        # Compute mean and variance for each metric
+        results = {
             'mean': {},
             'variance': {}
         }
         
-        for metric_name, layer_values in all_metrics.items():
-            result['mean'][metric_name] = {}
-            result['variance'][metric_name] = {}
+        for metric_name, layer_data in all_metrics.items():
+            results['mean'][metric_name] = {}
+            results['variance'][metric_name] = {}
             
-            for layer_idx, values in layer_values.items():
-                if len(values) > 0:
-                    result['mean'][metric_name][layer_idx] = np.mean(values)
-                    result['variance'][metric_name][layer_idx] = np.var(values)
+            for layer_idx, values in layer_data.items():
+                values_array = np.array(values)
+                results['mean'][metric_name][layer_idx] = np.mean(values_array)
+                results['variance'][metric_name][layer_idx] = np.var(values_array)
         
-        return result
+        return results
     
     def analyze_single_prompt(self, prompt: str, tokenizer) -> Dict[str, Any]:
         """
@@ -363,20 +452,38 @@ class GeometryAnalyzer:
             'similarity_matrices': sim_matrices
         }
     
-    def cleanup(self) -> None:
-        """Remove all hooks to prevent memory leaks."""
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
-        
-        if self.track_gradients and hasattr(self, 'grad_hooks'):
+    def cleanup(self):
+        """
+        Remove all hooks to prevent memory leaks.
+        Call this method when you're done using the analyzer.
+        """
+        # Remove forward hooks
+        if hasattr(self, 'hooks'):
+            for hook in self.hooks:
+                hook.remove()
+            self.hooks = []
+            
+        # Remove gradient hooks
+        if hasattr(self, 'grad_hooks'):
             for hook in self.grad_hooks:
                 hook.remove()
             self.grad_hooks = []
             
-        # Restore original training state
+        # Restore model training state
         if hasattr(self, 'was_training'):
             self.model.train(self.was_training)
+        
+        # Clear stored data
+        self.layer_outputs = {}
+        self.gradient_norms = {}
+        if hasattr(self, 'raw_gradients'):
+            del self.raw_gradients
+        if hasattr(self, 'gradient_update_corr'):
+            self.gradient_update_corr = {}
+        if hasattr(self, 'gradient_cosine_sims'):
+            self.gradient_cosine_sims = {}
+        
+        print("GeometryAnalyzer hooks and stored data cleaned up")
 
     def visualize_metrics(self, metrics_dict, title="Token Geometry Analysis", figsize=(14, 10)):
         """
@@ -402,18 +509,21 @@ class GeometryAnalyzer:
                 mean_metrics = metrics_dict
                 var_metrics = {}
             
-            # Define metrics to display
+            # Define metrics to display with labels
             available_metrics = list(mean_metrics.keys())
             metric_labels = {
                 'cosine_sim': 'Average Cosine Similarity',
                 'token_norm': 'Token Representation Norm',
                 'update_norm': 'Update Norm (Change Between Layers)',
-                'gradient_norm': 'Gradient Norm Across Layers'
+                'gradient_norm': 'Gradient Norm Across Layers',
+                'gradient_update_correlation': 'Correlation (Gradient ↔ Update)'
             }
             
             # Filter to only include metrics that exist in the data
-            metric_names = [m for m in ['cosine_sim', 'token_norm', 'update_norm', 'gradient_norm'] 
-                          if m in available_metrics]
+            metric_names = [m for m in [
+                'cosine_sim', 'token_norm', 'update_norm', 
+                'gradient_norm', 'gradient_update_correlation'
+            ] if m in available_metrics]
             
             if not metric_names:
                 logger.warning("No metrics found to visualize")
@@ -431,8 +541,12 @@ class GeometryAnalyzer:
                 
             fig.suptitle(title, fontsize=16)
             
+            # Create color scheme for different metrics
+            colors = plt.cm.tab10(np.linspace(0, 1, len(metric_names)))
+            
             for i, (metric_name, metric_title) in enumerate(zip(metric_names, metric_titles)):
                 ax = axes[i]
+                color = colors[i]
                 
                 # Get the metric values by layer
                 metric_data = mean_metrics[metric_name]
@@ -443,8 +557,20 @@ class GeometryAnalyzer:
                            transform=ax.transAxes)
                     continue
                     
-                # Get layers and values
+                # Get layers and values, handling potential embedding layer
                 layers = sorted(metric_data.keys())
+                
+                # For visualization, we may want to convert layer indices to more intuitive labels
+                # e.g., -1 -> "Embeddings", 0-N -> "Layer 1-N+1", N+1 -> "Final"
+                layer_labels = []
+                for layer in layers:
+                    if layer == -1:
+                        layer_labels.append("Emb")
+                    elif layer == len(self.model.transformer.h):
+                        layer_labels.append("Final")
+                    else:
+                        layer_labels.append(str(layer + 1))  # 1-indexed for display
+                
                 values = [metric_data[layer] for layer in layers]
                 
                 # Get variance if available
@@ -454,10 +580,25 @@ class GeometryAnalyzer:
                     
                     # Plot with error bars (standard deviation)
                     ax.errorbar(layers, values, yerr=std_values, marker='o', linestyle='-', 
-                               capsize=4, label=metric_title)
+                               capsize=4, color=color, label=metric_title)
                 else:
                     # Plot without error bars
-                    ax.plot(layers, values, marker='o', linestyle='-', linewidth=2, label=metric_title)
+                    ax.plot(layers, values, marker='o', linestyle='-', linewidth=2, 
+                           color=color, label=metric_title)
+                
+                # Customize plot based on metric type
+                if metric_name == 'gradient_update_correlation':
+                    # Add horizontal line at 0 for correlation
+                    ax.axhline(y=0, color='k', linestyle='--', alpha=0.3)
+                    # Set a reasonable y-range for correlations
+                    ax.set_ylim(-1.1, 1.1)
+                    # Add context for correlation interpretation
+                    ax.text(0.98, 0.05, "Positive: aligned directions", 
+                           horizontalalignment='right', transform=ax.transAxes, 
+                           fontsize=9, style='italic', alpha=0.7)
+                    ax.text(0.98, 0.95, "Negative: opposing directions", 
+                           horizontalalignment='right', transform=ax.transAxes, 
+                           fontsize=9, style='italic', alpha=0.7)
                 
                 # Set labels and grid
                 ax.set_ylabel(metric_title)
@@ -465,7 +606,7 @@ class GeometryAnalyzer:
                 ax.legend()
                 
                 # Add a horizontal line at 0 for context if values might be negative
-                if min(values) < 0:
+                if min(values) < 0 and metric_name != 'gradient_update_correlation':
                     ax.axhline(y=0, color='r', linestyle='-', alpha=0.3)
                 
                 # Set y limits with some padding
@@ -475,14 +616,19 @@ class GeometryAnalyzer:
                 else:
                     min_val = np.min(values)
                     max_val = np.max(values)
-                    
-                padding = max(0.1, (max_val - min_val) * 0.1)
-                ax.set_ylim(min_val - padding, max_val + padding)
+                
+                # Special y-limit handling for different metrics
+                if metric_name != 'gradient_update_correlation':  # Already handled above
+                    padding = max(0.1, (max_val - min_val) * 0.1)
+                    ax.set_ylim(min_val - padding, max_val + padding)
+                
+                # Set x-axis ticks with custom labels
+                ax.set_xticks(layers)
+                ax.set_xticklabels(layer_labels)
             
             # Configure the x-axis (shared across subplots)
             if 'layers' in locals() and len(layers) > 0:
-                axes[-1].set_xlabel('Layer Index')
-                axes[-1].set_xticks(layers)
+                axes[-1].set_xlabel('Layer')
             
             # Adjust layout and save/show
             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -492,3 +638,265 @@ class GeometryAnalyzer:
         except Exception as e:
             logger.warning(f"Error in visualization: {e}")
             return None
+
+    def analyze_gradients(self, input_ids, target_ids=None):
+        """
+        Perform a forward and backward pass to analyze gradients.
+        
+        Args:
+            input_ids: Input token IDs [batch_size, seq_len]
+            target_ids: Optional target token IDs (if None, will use input_ids shifted right)
+            
+        Returns:
+            Dictionary of gradient metrics
+        """
+        self.model.zero_grad()
+        
+        # If track_gradients is not enabled, enable it
+        if not hasattr(self, 'grad_hooks') or not self.grad_hooks:
+            self.enhance_gradient_tracking()
+        
+        # Ensure we're using enhanced gradient tracking
+        if not hasattr(self, 'gradient_update_corr'):
+            self.enhance_gradient_tracking()
+            
+        # Save original layer outputs before analysis
+        original_layer_outputs = self.layer_outputs.copy() if hasattr(self, 'layer_outputs') else {}
+        self.layer_outputs = {}
+            
+        # Set model to eval mode for consistent results
+        original_mode = self.model.training
+        self.model.eval()
+        
+        # Store the original input embeddings for first layer update calculation
+        with torch.no_grad():
+            # Get input embeddings directly from the embedding layer
+            input_embeds = self.model.transformer.wte(input_ids)  # [batch_size, seq_len, hidden_dim]
+            # Store these as a special key for embeddings
+            self.layer_outputs[-1] = input_embeds
+        
+        # Enable gradient computation
+        with torch.set_grad_enabled(True):
+            # Forward pass
+            logits, _ = self.model(input_ids)
+            
+            # If target_ids is not provided, create them by shifting input_ids right
+            if target_ids is None:
+                target_ids = input_ids.clone()
+                if target_ids.size(1) > 1:
+                    target_ids = target_ids[:, 1:].contiguous()
+                    # Add a random token at the end
+                    pad = torch.randint(0, self.model.config.vocab_size, 
+                                       (target_ids.size(0), 1), 
+                                       device=input_ids.device)
+                    target_ids = torch.cat([target_ids, pad], dim=1)
+            
+            # Compute loss
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1))
+            
+            # Backward pass
+            loss.backward()
+        
+        # Collect gradient metrics
+        gradient_metrics = {
+            'gradient_norm': self.gradient_norms.copy(),
+        }
+        
+        # Add gradient-update correlation if available
+        if hasattr(self, 'gradient_update_corr') and self.gradient_update_corr:
+            gradient_metrics['gradient_update_correlation'] = self.gradient_update_corr.copy()
+        
+        # Reset model state
+        self.model.train(original_mode)
+        self.model.zero_grad()
+        
+        # Restore original layer outputs
+        self.layer_outputs = original_layer_outputs
+        
+        return gradient_metrics
+    
+    def analyze_with_completion(self, prompt, completion, tokenizer):
+        """
+        Analyze model gradients using a prompt-completion pair.
+        This provides a more realistic gradient analysis using actual completions.
+        
+        Args:
+            prompt: The input prompt text
+            completion: The expected completion text
+            tokenizer: Tokenizer to encode the texts
+            
+        Returns:
+            Dictionary containing analysis results and gradient metrics
+        """
+        import torch
+        import torch.nn.functional as F
+        
+        # Tokenize the prompt and completion
+        try:
+            # Encode prompt tokens
+            prompt_tokens_list = tokenizer.encode(prompt)
+            prompt_tokens = torch.tensor([prompt_tokens_list], dtype=torch.long).to(self.device)
+            
+            # Store the model's original training state
+            original_mode = self.model.training
+            self.model.eval()
+            
+            # Zero gradients
+            self.model.zero_grad()
+            
+            # Ensure enhanced gradient tracking is enabled
+            if not hasattr(self, 'gradient_update_corr'):
+                self.enhance_gradient_tracking()
+                
+            # Store original layer outputs
+            original_layer_outputs = self.layer_outputs.copy() if hasattr(self, 'layer_outputs') else {}
+            self.layer_outputs = {}
+            
+            # Store input embeddings for first layer update calculations
+            with torch.no_grad():
+                input_embeds = self.model.transformer.wte(prompt_tokens)
+                self.layer_outputs[-1] = input_embeds
+                
+            # Simplified approach for gradient computation using next-token prediction
+            with torch.enable_grad():
+                # Forward pass on prompt
+                logits, _ = self.model(prompt_tokens)
+                
+                # For gradient computation, we'll use a simplified approach:
+                # predict the next token in the sequence (shifted targets)
+                batch_size, seq_len, vocab_size = logits.size()
+                
+                if seq_len > 1:
+                    # Shift logits and targets for next-token prediction
+                    logits = logits[:, :-1, :].contiguous()  # Remove last prediction
+                    targets = prompt_tokens[:, 1:].contiguous()  # Remove first token (predict next tokens)
+                    
+                    # Ensure shapes are compatible for loss computation
+                    # logits shape: [batch_size, seq_len-1, vocab_size]
+                    # targets shape: [batch_size, seq_len-1]
+                    
+                    # Reshape for cross entropy: [batch_size * (seq_len-1), vocab_size]
+                    logits_flat = logits.view(-1, vocab_size)
+                    targets_flat = targets.view(-1)
+                    
+                    # Compute loss
+                    loss = F.cross_entropy(logits_flat, targets_flat)
+                else:
+                    # For very short sequences, predict a dummy target
+                    # This is just to ensure we can compute gradients
+                    dummy_targets = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+                    loss = F.cross_entropy(logits[:, 0, :], dummy_targets)
+                
+                # Backward pass to compute gradients
+                loss.backward()
+            
+            # Compute token geometry metrics
+            token_metrics = {}
+            token_metrics['cosine_sim'] = {}
+            token_metrics['token_norm'] = {}
+            token_metrics['update_norm'] = {}
+            
+            # Sort layer indices for consistent processing
+            layer_indices = sorted(self.layer_outputs.keys())
+            
+            # Calculate metrics for each layer
+            for i, layer_idx in enumerate(layer_indices):
+                # Skip embedding layer for certain metrics
+                if layer_idx < 0:
+                    continue
+                    
+                layer_output = self.layer_outputs[layer_idx]
+                tokens = layer_output[0]  # Get first batch item
+                
+                # 1. Compute token norms
+                token_norms = torch.norm(tokens, p=2, dim=1)
+                token_metrics['token_norm'][layer_idx] = token_norms.mean().item()
+                
+                # 2. Compute cosine similarities
+                tokens_norm = F.normalize(tokens, p=2, dim=1)
+                sim_matrix = torch.mm(tokens_norm, tokens_norm.t())
+                
+                # Create mask to exclude self-similarity
+                seq_len = tokens.size(0)
+                mask = torch.ones_like(sim_matrix) - torch.eye(seq_len, device=self.device)
+                masked_sim = sim_matrix * mask
+                
+                # Only compute mean if we have more than one token
+                if seq_len > 1:
+                    token_metrics['cosine_sim'][layer_idx] = masked_sim.masked_select(mask.bool()).mean().item()
+                else:
+                    token_metrics['cosine_sim'][layer_idx] = 0.0
+                
+                # 3. Compute update norms for all layers after first
+                if i > 0:
+                    prev_layer_idx = layer_indices[i-1]
+                    prev_tokens = self.layer_outputs[prev_layer_idx][0]
+                    updates = tokens - prev_tokens
+                    update_norms = torch.norm(updates, p=2, dim=1)
+                    token_metrics['update_norm'][layer_idx] = update_norms.mean().item()
+            
+            # Collect gradient metrics
+            gradient_metrics = {
+                'gradient_norm': self.gradient_norms.copy() if hasattr(self, 'gradient_norms') else {},
+            }
+            
+            # Add gradient-update correlation if available
+            if hasattr(self, 'gradient_update_corr') and self.gradient_update_corr:
+                gradient_metrics['gradient_update_correlation'] = self.gradient_update_corr.copy()
+                
+            # Calculate similarity matrices
+            similarity_matrices = {}
+            for layer_idx in layer_indices:
+                if layer_idx < 0:
+                    continue
+                try:
+                    # Get embeddings
+                    embeddings = self.layer_outputs[layer_idx][0]
+                    
+                    # Normalize embeddings
+                    embeddings_norm = F.normalize(embeddings, p=2, dim=1)
+                    
+                    # Compute similarity matrix
+                    sim_matrix = torch.mm(embeddings_norm, embeddings_norm.t())
+                    
+                    # Store similarity matrix
+                    similarity_matrices[layer_idx] = sim_matrix.cpu().numpy()
+                except Exception as e:
+                    logger.error(f"Error processing layer {layer_idx}: {e}")
+                    continue
+                    
+            # Restore model state
+            self.model.train(original_mode)
+            self.model.zero_grad()
+            
+            # Restore original layer outputs
+            self.layer_outputs = original_layer_outputs
+            
+            # For reference, also encode the completion
+            try:
+                completion_tokens_list = tokenizer.encode(completion)
+                completion_tokens = [completion_tokens_list]
+            except:
+                completion_tokens = [[]]
+            
+            # Package results
+            results = {
+                'prompt_tokens': prompt_tokens.cpu().numpy()[0].tolist(),
+                'completion_tokens': completion_tokens[0],
+                'metrics': {**token_metrics, **gradient_metrics},
+                'similarity_matrices': similarity_matrices,
+                'loss': loss.item()
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in analyze_with_completion: {e}")
+            # Return empty results on error
+            return {
+                'prompt_tokens': [],
+                'completion_tokens': [],
+                'metrics': {},
+                'similarity_matrices': {},
+                'error': str(e)
+            }

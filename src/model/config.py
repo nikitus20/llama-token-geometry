@@ -16,8 +16,12 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = False  # True: bias in Linears, False: a bit better and faster
-    ln: Union[Literal["preln", "postln", "periln", "mixln", "predyt", "postdyt"], str] = "preln"  # Normalization architecture type
+    ln: Union[Literal["preln", "postln", "periln", "mixln", "predyt", "postdyt", "deepnorm"], str] = "preln"
+    # Add specific fields for DeepNorm
+    deepnorm_alpha: Optional[float] = None  # Will be computed automatically based on model depth
+    deepnorm_beta: Optional[float] = None   # Will be computed automatically based on model depth
     use_initial_ln: bool = True  # Whether to apply normalization after embeddings
+    initial_ln_scale: float = 1.0  # Scaling factor for initial layer normalization
     use_swiglu: bool = True  # Use SwiGLU activation (LLaMA-style) instead of GELU
     intermediate_size: int = None  # Size of the intermediate layer in MLP, None = auto-compute based on n_embd
     norm_eps: float = 1e-6  # Epsilon value for normalization layers

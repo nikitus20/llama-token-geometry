@@ -256,8 +256,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a LLaMA-style model')
     
     # Model arguments
-    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln', 'predyt', 'postdyt'], default='preln',
+    parser.add_argument('--ln', type=str, choices=['preln', 'postln', 'periln', 'mixln', 'predyt', 'postdyt', 'deepnorm'], default='preln',
                        help='Layer normalization architecture')
+    parser.add_argument('--deepnorm-alpha', type=float, default=None,
+                       help='Alpha parameter for DeepNorm (default: auto-computed based on depth)')
+    parser.add_argument('--deepnorm-beta', type=float, default=None,
+                       help='Beta parameter for DeepNorm (default: auto-computed based on depth)')
     parser.add_argument('--n-layer', type=int, default=12,
                        help='Number of transformer layers')
     parser.add_argument('--n-head', type=int, default=12,
@@ -465,6 +469,8 @@ def main():
         dropout=args.dropout,
         bias=False,  # LLaMA doesn't use bias
         ln=args.ln,
+        deepnorm_alpha=args.deepnorm_alpha,  # Pass DeepNorm alpha parameter
+        deepnorm_beta=args.deepnorm_beta,    # Pass DeepNorm beta parameter
         use_initial_ln=not args.no_initial_ln,
         use_swiglu=True,  # Always use SwiGLU as default
         max_position_embeddings=args.max_position_embeddings,
