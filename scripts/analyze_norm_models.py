@@ -16,6 +16,7 @@ from pathlib import Path
 from tqdm import tqdm
 import glob
 from collections import defaultdict
+import random
 
 # Add src directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -219,7 +220,6 @@ def analyze_model(model_path, pairs, tokenizer, device, output_dir, model_name, 
         
         # Limit number of pairs if specified
         if max_pairs and max_pairs < len(pairs):
-            import random
             selected_pairs = random.sample(pairs, max_pairs)
         else:
             selected_pairs = pairs
@@ -601,10 +601,16 @@ def main():
     # Data options
     parser.add_argument('--prompt-completion-file', default=None,
                       help='Path to JSON file with prompt-completion pairs')
+    parser.add_argument('--wikitext-prompts', default='outputs/wikitext_prompts.json',
+                      help='Path to WikiText prompts JSON file (larger dataset)')
+    parser.add_argument('--use-wikitext-prompts', action='store_true',
+                      help='Use WikiText prompts for analysis instead of the default sample data')
     parser.add_argument('--create-sample-data', action='store_true',
                       help='Create sample prompt-completion pairs if none provided')
     parser.add_argument('--max-pairs', type=int, default=3,
                       help='Maximum number of prompt-completion pairs to analyze per model')
+    parser.add_argument('--wikitext-pairs', type=int, default=50,
+                      help='Number of WikiText prompt-completion pairs to use (if --use-wikitext-prompts is set)')
     
     # Other options
     parser.add_argument('--tokenizer-dir', default='tokenizer/',
@@ -633,11 +639,28 @@ def main():
             logger.warning("Failed to load prompt-completion pairs, creating sample data")
             sample_file = os.path.join(args.output_dir, "sample_prompts.json")
             pairs = create_sample_prompt_completion_pairs(sample_file)
+    elif args.use_wikitext_prompts and os.path.exists(args.wikitext_prompts):
+        # Use the WikiText generated prompts for more comprehensive analysis
+        logger.info(f"Loading WikiText prompts from {args.wikitext_prompts}")
+        wikitext_pairs = load_prompt_completion_pairs(args.wikitext_prompts)
+        if wikitext_pairs:
+            # Use a random subset if requested
+            if 0 < args.wikitext_pairs < len(wikitext_pairs):
+                random.seed(42)  # For reproducibility
+                pairs = random.sample(wikitext_pairs, args.wikitext_pairs)
+                logger.info(f"Randomly selected {len(pairs)} pairs from {len(wikitext_pairs)} WikiText prompts")
+            else:
+                pairs = wikitext_pairs
+                logger.info(f"Using all {len(pairs)} WikiText prompts")
+        else:
+            logger.warning("Failed to load WikiText prompts, falling back to sample data")
+            sample_file = os.path.join(args.output_dir, "sample_prompts.json")
+            pairs = create_sample_prompt_completion_pairs(sample_file)
     elif args.create_sample_data:
         sample_file = os.path.join(args.output_dir, "sample_prompts.json")
         pairs = create_sample_prompt_completion_pairs(sample_file)
     else:
-        logger.error("No prompt-completion data provided. Use --prompt-completion-file or --create-sample-data")
+        logger.error("No prompt-completion data provided. Use --prompt-completion-file, --use-wikitext-prompts, or --create-sample-data")
         return
     
     logger.info(f"Using {len(pairs)} prompt-completion pairs for analysis")
