@@ -219,8 +219,10 @@ def main():
                        help='Do not include trained model in analysis')
     parser.add_argument('--device', type=str, default=None,
                        help='Device to run on (cuda, mps, or cpu)')
-    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
-                       help='Tokenizer to use (tiktoken, bpe, or char)')
+    parser.add_argument('--tokenizer', type=str, choices=['huggingface', 'tiktoken', 'bpe', 'char'], default='huggingface',
+                       help='Tokenizer to use (huggingface, tiktoken, bpe, or char)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                       help='Path to local HuggingFace tokenizer directory (for offline use)')
     
     args = parser.parse_args()
     
@@ -243,7 +245,7 @@ def main():
             prompts = load_prompts()
         
         # Get tokenizer
-        tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
+        tokenizer = get_tokenizer(tokenizer_type=args.tokenizer, local_tokenizer_path=args.local_tokenizer)
         
         # Check for trained model
         trained_model_path = None

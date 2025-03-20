@@ -24,6 +24,8 @@ saved_models/
 
 # Data directories (except for prompts.txt and embedding)
 data/wikitext-2/
+download_tokenizers.py
+tiny_llama_tokenizer/
 
 # Jupyter Notebook temporary files
 .ipynb_checkpoints/

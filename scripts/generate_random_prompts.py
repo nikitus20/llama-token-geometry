@@ -21,7 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def generate_random_prompts(num_prompts=100, min_tokens=10, max_tokens=50, output_file='data/prompts.txt', 
-                      tokenizer_type='tiktoken', wikitext_file='data/wikitext-2/validation.txt'):
+                      tokenizer_type='huggingface', wikitext_file='data/wikitext-2/validation.txt',
+                      local_tokenizer_path=None):
     """
     Generate random prompts by sampling from the WikiText-2 dataset.
     
@@ -32,6 +33,7 @@ def generate_random_prompts(num_prompts=100, min_tokens=10, max_tokens=50, outpu
         output_file: Path to save the prompts
         tokenizer_type: Type of tokenizer to use
         wikitext_file: Path to the WikiText-2 file to sample from
+        local_tokenizer_path: Path to local HuggingFace tokenizer directory (for offline use)
     """
     logger.info(f"Generating {num_prompts} random prompts from WikiText-2 using {tokenizer_type} tokenizer")
     
@@ -42,7 +44,7 @@ def generate_random_prompts(num_prompts=100, min_tokens=10, max_tokens=50, outpu
         return []
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=tokenizer_type)
+    tokenizer = get_tokenizer(tokenizer_type=tokenizer_type, local_tokenizer_path=local_tokenizer_path)
     
     # Load the WikiText-2 file
     try:
@@ -126,8 +128,10 @@ def main():
                        help='Maximum number of tokens per prompt')
     parser.add_argument('--output-file', type=str, default='data/prompts.txt',
                        help='Path to save the prompts')
-    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
-                       help='Tokenizer to use (tiktoken, bpe, or char)')
+    parser.add_argument('--tokenizer', type=str, choices=['huggingface', 'tiktoken', 'bpe', 'char'], default='huggingface',
+                       help='Tokenizer to use (huggingface, tiktoken, bpe, or char)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                       help='Path to local HuggingFace tokenizer directory (for offline use)')
     parser.add_argument('--wikitext-file', type=str, default='data/wikitext-2/validation.txt',
                        help='Path to the WikiText-2 file to sample from')
     
@@ -140,7 +144,8 @@ def main():
         max_tokens=args.max_tokens,
         output_file=args.output_file,
         tokenizer_type=args.tokenizer,
-        wikitext_file=args.wikitext_file
+        wikitext_file=args.wikitext_file,
+        local_tokenizer_path=args.local_tokenizer
     )
 
 if __name__ == "__main__":

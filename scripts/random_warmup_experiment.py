@@ -444,8 +444,10 @@ def main():
     # Data and model arguments
     parser.add_argument('--output-dir', type=str, default='outputs/random_warmup',
                       help='Directory to save results')
-    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
-                      help='Tokenizer to use (tiktoken, bpe, or char)')
+    parser.add_argument('--tokenizer', type=str, choices=['huggingface', 'tiktoken', 'bpe', 'char'], default='huggingface',
+                      help='Tokenizer to use (huggingface, tiktoken, bpe, or char)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                      help='Path to local HuggingFace tokenizer directory (for offline use)')
     parser.add_argument('--prompt', type=str, default=None,
                       help='Prompt to analyze (defaults to a standard test prompt)')
     parser.add_argument('--seq-length', type=int, default=128,
@@ -498,7 +500,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer, local_tokenizer_path=args.local_tokenizer)
     vocab_size = tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else 50257
     
     # Set default prompt if not provided

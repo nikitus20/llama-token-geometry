@@ -41,8 +41,10 @@ def main():
                        help='Dataset split to evaluate on')
     parser.add_argument('--text-file', type=str,
                        help='Path to custom text file for evaluation (used when dataset=text)')
-    parser.add_argument('--tokenizer', type=str, choices=['tiktoken', 'bpe', 'char'], default='tiktoken',
-                       help='Tokenizer to use (tiktoken, bpe, or char)')
+    parser.add_argument('--tokenizer', type=str, choices=['huggingface', 'tiktoken', 'bpe', 'char'], default='huggingface',
+                       help='Tokenizer to use (huggingface, tiktoken, bpe, or char)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                       help='Path to local HuggingFace tokenizer directory (for offline use)')
     
     # Evaluation arguments
     parser.add_argument('--batch-size', type=int, default=4,
@@ -72,7 +74,7 @@ def main():
         return
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer)
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer, local_tokenizer_path=args.local_tokenizer)
     
     # Create evaluation dataset
     if args.dataset == 'wikitext':

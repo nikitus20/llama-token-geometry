@@ -65,6 +65,16 @@ def test_tokenizer():
     """Test tokenizer functionality."""
     logger.info("Testing tokenizers...")
     
+    # Test HuggingFace tokenizer (default)
+    try:
+        huggingface_tokenizer = get_tokenizer(tokenizer_type="huggingface")
+        test_text = "Hello, world!"
+        huggingface_tokens = huggingface_tokenizer.encode(test_text)
+        huggingface_decoded = huggingface_tokenizer.decode(huggingface_tokens)
+        logger.info(f"HuggingFace tokenizer: '{test_text}' -> {huggingface_tokens} -> '{huggingface_decoded}'")
+    except Exception as e:
+        logger.warning(f"HuggingFace tokenizer test skipped: {e}")
+    
     # Test character tokenizer
     tokenizer = get_tokenizer(tokenizer_type="char")
     test_text = "Hello, world!"
@@ -108,7 +118,15 @@ def test_geometry_analyzer():
     analyzer = GeometryAnalyzer(model, device=device)
     
     # Test with a simple input
-    tokenizer = get_tokenizer(tokenizer_type="char")
+    try:
+        # Try using HuggingFace tokenizer (default)
+        tokenizer = get_tokenizer(tokenizer_type="huggingface")
+        logger.info("Using HuggingFace tokenizer for analyzer test")
+    except Exception as e:
+        # Fall back to character tokenizer if HuggingFace fails
+        logger.warning(f"HuggingFace tokenizer failed: {e}, falling back to character tokenizer")
+        tokenizer = get_tokenizer(tokenizer_type="char")
+        
     test_text = "This is a test sentence for the analyzer."
     tokens = tokenizer.encode(test_text)
     input_ids = torch.tensor([tokens], dtype=torch.long, device=device)

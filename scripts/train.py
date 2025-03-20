@@ -301,6 +301,8 @@ def parse_args():
                    help='Tokenizer to use')
     parser.add_argument('--tokenizer-model', type=str, default='TinyLlama/TinyLlama-1.1B-Chat-v1.0',
                    help='Model name for HuggingFace tokenizer (use open models like TinyLlama/TinyLlama-1.1B-Chat-v1.0, mistralai/Mistral-7B-v0.1, or openlm-research/open_llama_3b)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                   help='Path to local HuggingFace tokenizer directory (for offline use)')
     parser.add_argument('--workers', type=int, default=2,
                        help='Number of dataloader workers')
     parser.add_argument('--eval-interval', type=int, default=2000,
@@ -398,7 +400,9 @@ def main():
     device = get_device(args)
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer_type, model_name=args.tokenizer_model)
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer_type, 
+                             model_name=args.tokenizer_model,
+                             local_tokenizer_path=args.local_tokenizer)
     pad_idx = tokenizer.pad_token_id  # Use the tokenizer's pad_token_id property instead of assuming last token
     
     # Create datasets

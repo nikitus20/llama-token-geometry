@@ -52,31 +52,27 @@ def _get_sample_prompts() -> List[str]:
     ]
 
 
-def get_tokenizer(tokenizer_type: str = "huggingface", model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0") -> BaseTokenizer:
+def get_tokenizer(tokenizer_type: str = "huggingface", 
+                  model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                  local_tokenizer_path: str = None) -> BaseTokenizer:
     """
     Get a tokenizer based on the specified type.
     
     Args:
         tokenizer_type: Type of tokenizer to use ("huggingface", "tiktoken", "bpe", or "char")
-        model_name: Model name or path for HuggingFace AutoTokenizer
+        model_name: Model name for HuggingFace AutoTokenizer
+        local_tokenizer_path: Path to local tokenizer directory (overrides model_name if provided)
             
-            Recommended open-source Llama-compatible models:
-            - "TinyLlama/TinyLlama-1.1B-Chat-v1.0" (default)
-            - "openlm-research/open_llama_3b"
-            - "openlm-research/open_llama_7b" 
-            - "mistralai/Mistral-7B-v0.1"
-            
-            Note: Meta's "meta-llama/Llama-2-7b-hf" is gated and requires 
-            authentication. The models above are open alternatives.
-        
     Returns:
         A tokenizer instance
     """
     # Try HuggingFace tokenizer first (new default)
     if tokenizer_type.lower() == "huggingface":
         try:
-            logger.info(f"Using HuggingFace AutoTokenizer with model {model_name}")
-            return HuggingFaceTokenizer(model_name)
+            use_local = local_tokenizer_path is not None
+            tokenizer_path = local_tokenizer_path if use_local else model_name
+            logger.info(f"Using HuggingFace AutoTokenizer with {'local path' if use_local else 'model'} {tokenizer_path}")
+            return HuggingFaceTokenizer(tokenizer_path, local_files_only=use_local)
         except Exception as e:
             logger.error(f"Error loading HuggingFace tokenizer: {e}")
             logger.info("Falling back to Tiktoken tokenizer")

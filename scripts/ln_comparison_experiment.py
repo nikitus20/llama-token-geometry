@@ -176,6 +176,10 @@ def main():
                       help='Device to run on (cuda, mps, or cpu)')
     parser.add_argument('--compare-initial-ln', action='store_true',
                       help='Compare models with and without initial LN')
+    parser.add_argument('--tokenizer', type=str, choices=['huggingface', 'tiktoken', 'bpe', 'char'], default='huggingface',
+                      help='Tokenizer to use (huggingface, tiktoken, bpe, or char)')
+    parser.add_argument('--local-tokenizer', type=str, default=None,
+                      help='Path to local HuggingFace tokenizer directory (for offline use)')
     args = parser.parse_args()
     
     # Create output directory
@@ -187,7 +191,7 @@ def main():
     logger.info(f"Using device: {args.device}")
     
     # Get tokenizer
-    tokenizer = get_tokenizer()
+    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer, local_tokenizer_path=args.local_tokenizer)
     vocab_size = tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else 50257
     
     # Set default prompt if not provided
