@@ -296,19 +296,14 @@ def parse_args():
     # Data and evaluation arguments
     parser.add_argument('--data-dir', type=str, default='data/wikitext-2',
                        help='Directory containing dataset')
-    parser.add_argument('--tokenizer-type', type=str, default='huggingface',
-                   choices=['huggingface', 'tiktoken', 'bpe', 'char'],
-                   help='Tokenizer to use')
-    parser.add_argument('--tokenizer-model', type=str, default='TinyLlama/TinyLlama-1.1B-Chat-v1.0',
-                   help='Model name for HuggingFace tokenizer (use open models like TinyLlama/TinyLlama-1.1B-Chat-v1.0, mistralai/Mistral-7B-v0.1, or openlm-research/open_llama_3b)')
-    parser.add_argument('--local-tokenizer', type=str, default=None,
-                   help='Path to local HuggingFace tokenizer directory (for offline use)')
+    parser.add_argument('--tokenizer-dir', type=str, default='tokenizer/',
+                   help='Path to local tokenizer directory')
     parser.add_argument('--workers', type=int, default=2,
                        help='Number of dataloader workers')
     parser.add_argument('--eval-interval', type=int, default=2000,
                        help='Evaluate every N update steps')
     parser.add_argument('--eval-tokens', type=int, default=500000,
-                       help='Number of tokens to use for evaluation')
+                       help='Maximum number of tokens to evaluate on')
     
     # Saving and loading arguments
     parser.add_argument('--save-dir', type=str, required=True,
@@ -400,9 +395,7 @@ def main():
     device = get_device(args)
     
     # Get tokenizer
-    tokenizer = get_tokenizer(tokenizer_type=args.tokenizer_type, 
-                             model_name=args.tokenizer_model,
-                             local_tokenizer_path=args.local_tokenizer)
+    tokenizer = get_tokenizer(model_dir=args.tokenizer_dir)
     pad_idx = tokenizer.pad_token_id  # Use the tokenizer's pad_token_id property instead of assuming last token
     
     # Create datasets
@@ -480,21 +473,19 @@ def main():
     
     # If we're using a HuggingFace tokenizer with a modified vocabulary
     # (like when adding a pad token to Llama), resize the model's embedding matrix
-    if args.tokenizer_type == "huggingface":
-        if getattr(tokenizer, "tokenizer", None) is not None and hasattr(tokenizer.tokenizer, "added_tokens_encoder"):
-            # Handle case when using HuggingFaceTokenizer wrapper
-            if len(tokenizer.tokenizer.added_tokens_encoder) > 0:
-                logger.info(f"Resizing model embeddings to match tokenizer vocabulary size: {tokenizer.vocab_size}")
-                
-                # Need to resize both the embedding and lm_head
-                current_vocab_size = model.transformer.wte.weight.size(0)
-                if tokenizer.vocab_size != current_vocab_size:
-                    model.transformer.wte = nn.Embedding(tokenizer.vocab_size, config.n_embd)
-                    model.lm_head = nn.Linear(config.n_embd, tokenizer.vocab_size, bias=False)
-                    # Re-tie weights
-                    model.transformer.wte.weight = model.lm_head.weight
-                    model.config.vocab_size = tokenizer.vocab_size
-                    logger.info(f"Model vocabulary resized from {current_vocab_size} to {tokenizer.vocab_size}")
+    if hasattr(tokenizer, "tokenizer") and hasattr(tokenizer.tokenizer, "added_tokens_encoder"):
+        if len(tokenizer.tokenizer.added_tokens_encoder) > 0:
+            logger.info(f"Resizing model embeddings to match tokenizer vocabulary size: {tokenizer.vocab_size}")
+            
+            # Need to resize both the embedding and lm_head
+            current_vocab_size = model.transformer.wte.weight.size(0)
+            if tokenizer.vocab_size != current_vocab_size:
+                model.transformer.wte = nn.Embedding(tokenizer.vocab_size, config.n_embd)
+                model.lm_head = nn.Linear(config.n_embd, tokenizer.vocab_size, bias=False)
+                # Re-tie weights
+                model.transformer.wte.weight = model.lm_head.weight
+                model.config.vocab_size = tokenizer.vocab_size
+                logger.info(f"Model vocabulary resized from {current_vocab_size} to {tokenizer.vocab_size}")
     
     if args.gradient_checkpointing:
         if hasattr(model, "gradient_checkpointing_enable"):

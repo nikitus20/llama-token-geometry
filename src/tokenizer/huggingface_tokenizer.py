@@ -4,7 +4,8 @@ Hugging Face AutoTokenizer implementation compatible with the project's tokenize
 
 import logging
 import os
-from typing import List
+import shutil
+from typing import List, Optional
 from src.tokenizer.base import BaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,11 @@ class HuggingFaceTokenizer(BaseTokenizer):
                 use_fast=True,
                 local_files_only=local_files_only
             )
+            
+            # If we successfully loaded a remote model, save it locally for future offline use
+            if not local_files_only and not is_local_path:
+                self._save_tokenizer_locally(model_name_or_path)
+                
         except Exception as e:
             if "gated repo" in str(e) or "Access to model" in str(e) or "access is restricted" in str(e):
                 error_msg = f"Cannot access {model_name_or_path} as it's a gated model requiring authentication. Try using an open model like 'TinyLlama/TinyLlama-1.1B-Chat-v1.0' or 'mistralai/Mistral-7B-v0.1' instead."
@@ -79,6 +85,24 @@ class HuggingFaceTokenizer(BaseTokenizer):
         self.vocab_size = len(self.tokenizer.get_vocab())
         logger.info(f"Initialized HuggingFace tokenizer with model {model_name_or_path}, vocab size: {self.vocab_size}")
     
+    def _save_tokenizer_locally(self, model_name: str) -> None:
+        """
+        Save the tokenizer locally for future offline use.
+        
+        Args:
+            model_name: The name of the model used to create the tokenizer
+        """
+        try:
+            # Create directory structure
+            local_dir = os.path.join('tokenizers', model_name.split('/')[-1].lower())
+            os.makedirs(local_dir, exist_ok=True)
+            
+            # Save tokenizer to local directory
+            self.tokenizer.save_pretrained(local_dir)
+            logger.info(f"Saved tokenizer to {local_dir} for future offline use")
+        except Exception as e:
+            logger.warning(f"Failed to save tokenizer locally: {e}")
+    
     @property
     def pad_token_id(self) -> int:
         """Return the padding token ID."""
@@ -101,3 +125,35 @@ class HuggingFaceTokenizer(BaseTokenizer):
         except Exception as e:
             logger.error(f"Error decoding tokens with HuggingFace tokenizer: {e}")
             return ""
+    
+    @classmethod
+    def save_remote_tokenizer_locally(cls, model_name: str, save_path: Optional[str] = None) -> str:
+        """
+        Utility method to download and save a remote tokenizer for offline use.
+        
+        Args:
+            model_name: HuggingFace model name to download
+            save_path: Optional custom save path
+            
+        Returns:
+            Path where the tokenizer was saved
+        """
+        try:
+            from transformers import AutoTokenizer
+            
+            # Determine save path
+            if save_path is None:
+                save_path = os.path.join('tokenizers', model_name.split('/')[-1].lower())
+            
+            # Create directory
+            os.makedirs(save_path, exist_ok=True)
+            
+            # Download and save tokenizer
+            tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+            tokenizer.save_pretrained(save_path)
+            
+            logger.info(f"Successfully downloaded and saved tokenizer from {model_name} to {save_path}")
+            return save_path
+        except Exception as e:
+            logger.error(f"Error saving remote tokenizer {model_name}: {e}")
+            raise

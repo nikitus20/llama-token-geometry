@@ -63,44 +63,22 @@ def test_model_creation():
 
 def test_tokenizer():
     """Test tokenizer functionality."""
-    logger.info("Testing tokenizers...")
+    logger.info("Testing tokenizer...")
     
-    # Test HuggingFace tokenizer (default)
     try:
-        huggingface_tokenizer = get_tokenizer(tokenizer_type="huggingface")
+        # Test the tokenizer with the default local path
+        tokenizer = get_tokenizer()
         test_text = "Hello, world!"
-        huggingface_tokens = huggingface_tokenizer.encode(test_text)
-        huggingface_decoded = huggingface_tokenizer.decode(huggingface_tokens)
-        logger.info(f"HuggingFace tokenizer: '{test_text}' -> {huggingface_tokens} -> '{huggingface_decoded}'")
-    except Exception as e:
-        logger.warning(f"HuggingFace tokenizer test skipped: {e}")
-    
-    # Test character tokenizer
-    tokenizer = get_tokenizer(tokenizer_type="char")
-    test_text = "Hello, world!"
-    tokens = tokenizer.encode(test_text)
-    decoded = tokenizer.decode(tokens)
-    logger.info(f"Character tokenizer: '{test_text}' -> {tokens} -> '{decoded}'")
-    
-    # Try to test BPE tokenizer if available
-    try:
-        bpe_tokenizer = get_tokenizer(tokenizer_type="bpe")
-        bpe_tokens = bpe_tokenizer.encode(test_text)
-        bpe_decoded = bpe_tokenizer.decode(bpe_tokens)
-        logger.info(f"BPE tokenizer: '{test_text}' -> {bpe_tokens} -> '{bpe_decoded}'")
-    except Exception as e:
-        logger.warning(f"BPE tokenizer test skipped: {e}")
+        tokens = tokenizer.encode(test_text)
+        decoded = tokenizer.decode(tokens)
+        logger.info(f"HuggingFace tokenizer: '{test_text}' -> {tokens} -> '{decoded}'")
         
-    # Try to test Tiktoken tokenizer if available
-    try:
-        tiktoken_tokenizer = get_tokenizer(tokenizer_type="tiktoken")
-        tiktoken_tokens = tiktoken_tokenizer.encode(test_text)
-        tiktoken_decoded = tiktoken_tokenizer.decode(tiktoken_tokens)
-        logger.info(f"Tiktoken tokenizer: '{test_text}' -> {tiktoken_tokens} -> '{tiktoken_decoded}'")
+        # Verify tokenizer type
+        logger.info(f"Tokenizer vocab size: {tokenizer.vocab_size}")
     except Exception as e:
-        logger.warning(f"Tiktoken tokenizer test skipped: {e}")
+        logger.error(f"Tokenizer test failed: {e}")
     
-    logger.info("Tokenizer tests completed!")
+    logger.info("Tokenizer test completed!")
 
 
 def test_geometry_analyzer():
@@ -117,15 +95,13 @@ def test_geometry_analyzer():
     # Create analyzer
     analyzer = GeometryAnalyzer(model, device=device)
     
-    # Test with a simple input
+    # Get tokenizer
     try:
-        # Try using HuggingFace tokenizer (default)
-        tokenizer = get_tokenizer(tokenizer_type="huggingface")
+        tokenizer = get_tokenizer()
         logger.info("Using HuggingFace tokenizer for analyzer test")
     except Exception as e:
-        # Fall back to character tokenizer if HuggingFace fails
-        logger.warning(f"HuggingFace tokenizer failed: {e}, falling back to character tokenizer")
-        tokenizer = get_tokenizer(tokenizer_type="char")
+        logger.error(f"Tokenizer failed: {e}")
+        return
         
     test_text = "This is a test sentence for the analyzer."
     tokens = tokenizer.encode(test_text)
@@ -190,6 +166,8 @@ def main():
                        help='Skip analyzer tests')
     parser.add_argument('--skip-pretrained', action='store_true',
                        help='Skip pretrained model loading tests')
+    parser.add_argument('--tokenizer-dir', type=str, default='tokenizer/',
+                       help='Path to local tokenizer directory')
     args = parser.parse_args()
     
     # Run tests

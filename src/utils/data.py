@@ -5,14 +5,12 @@ Data utilities for loading and processing prompts.
 import os
 import logging
 from typing import List, Optional
-
-from src.tokenizer.base import BaseTokenizer
-from src.tokenizer.character import CharTokenizer
-from src.tokenizer.bpe import BPETokenizer
-from src.tokenizer.tiktoken_tokenizer import TiktokenTokenizer
-from src.tokenizer.huggingface_tokenizer import HuggingFaceTokenizer
+from src.tokenizer import Tokenizer
 
 logger = logging.getLogger(__name__)
+
+# Local tokenizer path
+DEFAULT_TOKENIZER_PATH = 'tokenizer/'
 
 def load_prompts(prompt_file: str = 'data/prompts.txt', num_samples: Optional[int] = None) -> List[str]:
     """
@@ -52,54 +50,32 @@ def _get_sample_prompts() -> List[str]:
     ]
 
 
-def get_tokenizer(tokenizer_type: str = "huggingface", 
-                  model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                  local_tokenizer_path: str = None) -> BaseTokenizer:
+def get_tokenizer(tokenizer_type: str = None, model_name: str = None, 
+                 local_tokenizer_path: str = None, model_dir: str = DEFAULT_TOKENIZER_PATH):
     """
-    Get a tokenizer based on the specified type.
+    Get a HuggingFace tokenizer from local files.
     
     Args:
-        tokenizer_type: Type of tokenizer to use ("huggingface", "tiktoken", "bpe", or "char")
-        model_name: Model name for HuggingFace AutoTokenizer
-        local_tokenizer_path: Path to local tokenizer directory (overrides model_name if provided)
+        tokenizer_type: Kept for backward compatibility, ignored
+        model_name: Kept for backward compatibility, ignored
+        local_tokenizer_path: Path to local tokenizer directory (takes precedence over model_dir)
+        model_dir: Path to local tokenizer directory (default)
             
     Returns:
-        A tokenizer instance
+        A Tokenizer instance
     """
-    # Try HuggingFace tokenizer first (new default)
-    if tokenizer_type.lower() == "huggingface":
-        try:
-            use_local = local_tokenizer_path is not None
-            tokenizer_path = local_tokenizer_path if use_local else model_name
-            logger.info(f"Using HuggingFace AutoTokenizer with {'local path' if use_local else 'model'} {tokenizer_path}")
-            return HuggingFaceTokenizer(tokenizer_path, local_files_only=use_local)
-        except Exception as e:
-            logger.error(f"Error loading HuggingFace tokenizer: {e}")
-            logger.info("Falling back to Tiktoken tokenizer")
-            tokenizer_type = "tiktoken"
+    # Support legacy parameters
+    path = local_tokenizer_path if local_tokenizer_path is not None else model_dir
     
-    # Try tiktoken next
-    if tokenizer_type.lower() == "tiktoken":
-        try:
-            logger.info("Using Tiktoken tokenizer (GPT-2 encoding)")
-            return TiktokenTokenizer("gpt2")
-        except Exception as e:
-            logger.error(f"Error loading Tiktoken tokenizer: {e}")
-            logger.info("Falling back to BPE tokenizer")
-            tokenizer_type = "bpe"
+    if tokenizer_type is not None:
+        logger.warning(f"tokenizer_type parameter '{tokenizer_type}' is deprecated and ignored. " 
+                      "Using HuggingFace tokenizer only.")
     
-    # Try BPE next
-    if tokenizer_type.lower() == "bpe" and os.path.exists('data/embedding/encoder.json') and os.path.exists('data/embedding/vocab.bpe'):
-        try:
-            logger.info("Using BPE tokenizer from embedding files")
-            return BPETokenizer('data/embedding/encoder.json', 'data/embedding/vocab.bpe')
-        except Exception as e:
-            logger.error(f"Error loading BPE tokenizer: {e}")
-            logger.info("Falling back to character tokenizer")
+    if model_name is not None:
+        logger.warning(f"model_name parameter '{model_name}' is deprecated and ignored. " 
+                      "Using local tokenizer from {path}")
     
-    # Character tokenizer as last resort
-    logger.info("Using character-level tokenizer")
-    return CharTokenizer(256)
+    return Tokenizer(model_dir=path)
 
 
 def create_prompts_file(prompts: List[str], output_path: str = 'data/prompts.txt') -> None:
