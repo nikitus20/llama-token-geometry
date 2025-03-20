@@ -19,7 +19,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.nn.parallel import DistributedDataParallel
 from datetime import datetime
 # Import your custom model
@@ -29,6 +29,8 @@ from src.utils.data import get_tokenizer
 from src.utils.wikitext_dataset import WikiTextDataset
 
 from tqdm import tqdm
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configure logging
 logging.basicConfig(
@@ -510,18 +512,26 @@ def main():
                     start_step = training_state.get("step", 0)
                     logger.info(f"Resuming from step {start_step}")
     
-    # Set model dtype and move to device
     if args.dtype == "bfloat16" and device.type in ("cuda", "mps") and torch.cuda.is_bf16_supported():
         model_dtype = torch.bfloat16
-        logger.info("Using bfloat16 precision")
+        logger.info("Using bfloat16 precision without gradient scaling")
+        use_amp = True
+        use_grad_scaler = False  # Don't use GradScaler with bfloat16
     elif args.dtype == "float16" and device.type in ("cuda", "mps"):
         model_dtype = torch.float16
-        logger.info("Using float16 precision")
+        logger.info("Using float16 precision with gradient scaling")
+        use_amp = True
+        use_grad_scaler = True
     else:
         model_dtype = torch.float32
         logger.info("Using float32 precision")
-    
+        use_amp = False
+        use_grad_scaler = False
+
     model = model.to(device=device, dtype=model_dtype)
+
+    # Setup mixed precision training
+    scaler = GradScaler('cuda') if use_amp and use_grad_scaler and device.type == "cuda" else None
     
     # Wrap model for distributed training
     if not args.single_gpu and world_size > 1 and device.type == "cuda":
@@ -553,9 +563,6 @@ def main():
             optimizer.load_state_dict(optimizer_state["optimizer"])
             scheduler.load_state_dict(optimizer_state["scheduler"])
     
-    # Setup mixed precision training
-    use_amp = model_dtype != torch.float32 and device.type != "cpu"
-    scaler = GradScaler() if use_amp and device.type == "cuda" else None
     
     # Print model information
     n_params = sum(p.numel() for p in model.parameters())
@@ -604,13 +611,17 @@ def main():
             tokens_seen += tokens_in_batch
             
             # Forward pass with mixed precision
-            if use_amp and device.type == "cuda":
-                with autocast():
+            # Forward pass with mixed precision
+            if use_amp:
+                with autocast('cuda' if device.type == "cuda" else device.type):
                     _, loss = model(input_ids, labels)
                     loss = loss / args.gradient_accumulation
                 
-                # Backward pass with gradient scaling
-                scaler.scale(loss).backward()
+                # Backward pass with or without gradient scaling
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
             else:
                 # Standard forward/backward without mixed precision
                 _, loss = model(input_ids, labels)
@@ -634,12 +645,12 @@ def main():
             if (global_step + 1) % args.gradient_accumulation == 0:
                 # Gradient clipping
                 if args.grad_clip > 0:
-                    if use_amp and device.type == "cuda":
+                    if scaler is not None:
                         scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                
+
                 # Update weights
-                if use_amp and device.type == "cuda":
+                if scaler is not None:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
